@@ -30,6 +30,7 @@ type keyShareData struct {
 	ShareID   string
 	PartyID   string
 	Xi        *big.Int `json:"-"`
+	CacheID   string
 	CreatedAt time.Time
 }
 
@@ -41,6 +42,7 @@ type encryptedShard struct {
 type keyGenerator struct {
 	mu            sync.RWMutex
 	storage       map[string]encryptedShard
+	saveDataCache map[string]tsskeygen.LocalPartySaveData
 	encryptionKey []byte
 }
 
@@ -52,6 +54,7 @@ func NewKeyGenerator() (KeyGenerator, error) {
 
 	return &keyGenerator{
 		storage:       make(map[string]encryptedShard),
+		saveDataCache: make(map[string]tsskeygen.LocalPartySaveData),
 		encryptionKey: key,
 	}, nil
 }
@@ -75,10 +78,20 @@ func (k *keyGenerator) GenerateKeyWithProgress(ctx context.Context, callback Pro
 	}
 
 	emit(callback, "encoding shards", 70)
+	shard1Save := saves[0]
+	shard2Save := saves[1]
+	normalizeLocalSaveData(&shard1Save)
+	normalizeLocalSaveData(&shard2Save)
+	shard1CacheID := randomID("save1")
+	shard2CacheID := randomID("save2")
+	k.storeSaveData(shard1CacheID, shard1Save)
+	k.storeSaveData(shard2CacheID, shard2Save)
+
 	shard1Raw, err := marshalShare(keyShareData{
 		ShareID:   randomID("s1"),
 		PartyID:   "agent",
-		Xi:        saves[0].Xi,
+		Xi:        shard1Save.Xi,
+		CacheID:   shard1CacheID,
 		CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -88,7 +101,8 @@ func (k *keyGenerator) GenerateKeyWithProgress(ctx context.Context, callback Pro
 	shard2Raw, err := marshalShare(keyShareData{
 		ShareID:   randomID("s2"),
 		PartyID:   "server",
-		Xi:        saves[1].Xi,
+		Xi:        shard2Save.Xi,
+		CacheID:   shard2CacheID,
 		CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
@@ -101,9 +115,10 @@ func (k *keyGenerator) GenerateKeyWithProgress(ctx context.Context, callback Pro
 		return nil, ErrKeyGenFailed
 	}
 
-	privD := new(big.Int).Add(saves[0].Xi, saves[1].Xi)
-	privD.Mod(privD, gethcrypto.S256().Params().N)
-	pub := privateScalarToPublicKey(privD)
+	pub := saveDataToPublicKey(shard1Save)
+	if pub == nil {
+		return nil, ErrKeyGenFailed
+	}
 
 	emit(callback, "completed", 100)
 	return &KeyGenResult{
@@ -112,6 +127,31 @@ func (k *keyGenerator) GenerateKeyWithProgress(ctx context.Context, callback Pro
 		Shard2ID:  shard2ID,
 		PublicKey: publicKeyToHex(pub),
 	}, nil
+}
+
+func (k *keyGenerator) LoadShard2(ctx context.Context, shard2ID string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, ErrContextCanceled
+	}
+	plain, err := k.loadAndDecryptShard2(shard2ID)
+	if err != nil {
+		return nil, ErrShardNotFound
+	}
+	return plain, nil
+}
+
+func (k *keyGenerator) LoadSaveData(ctx context.Context, cacheID string) (tsskeygen.LocalPartySaveData, error) {
+	if err := ctx.Err(); err != nil {
+		return tsskeygen.LocalPartySaveData{}, ErrContextCanceled
+	}
+	k.mu.RLock()
+	save, ok := k.saveDataCache[cacheID]
+	k.mu.RUnlock()
+	if !ok {
+		return tsskeygen.LocalPartySaveData{}, ErrShardNotFound
+	}
+	normalizeLocalSaveData(&save)
+	return save, nil
 }
 
 func emit(cb ProgressCallback, step string, percent int) {
@@ -137,7 +177,7 @@ func runGG18Keygen(ctx context.Context) ([]tsskeygen.LocalPartySaveData, error) 
 	partyKey := make(map[string]*big.Int, partyCount)
 
 	for _, pid := range partyIDs {
-		params := tss.NewParameters(gethcrypto.S256(), peerCtx, pid, partyCount, threshold)
+		params := tss.NewParameters(tss.S256(), peerCtx, pid, partyCount, threshold)
 		party := tsskeygen.NewLocalParty(params, outCh, endCh)
 		parties = append(parties, party)
 		partyByID[pid.Id] = party
@@ -255,6 +295,12 @@ func (k *keyGenerator) saveEncryptedShard2(id string, plain []byte) error {
 	return nil
 }
 
+func (k *keyGenerator) storeSaveData(cacheID string, save tsskeygen.LocalPartySaveData) {
+	k.mu.Lock()
+	k.saveDataCache[cacheID] = save
+	k.mu.Unlock()
+}
+
 func (k *keyGenerator) loadAndDecryptShard2(id string) ([]byte, error) {
 	k.mu.RLock()
 	entry, ok := k.storage[id]
@@ -274,9 +320,26 @@ func (k *keyGenerator) loadAndDecryptShard2(id string) ([]byte, error) {
 	return gcm.Open(nil, entry.Nonce, entry.Ciphertext, nil)
 }
 
-func privateScalarToPublicKey(d *big.Int) *ecdsa.PublicKey {
-	x, y := gethcrypto.S256().ScalarBaseMult(d.Bytes())
-	return &ecdsa.PublicKey{Curve: gethcrypto.S256(), X: x, Y: y}
+func normalizeLocalSaveData(save *tsskeygen.LocalPartySaveData) {
+	for _, point := range save.BigXj {
+		if point != nil {
+			point.SetCurve(tss.S256())
+		}
+	}
+	if save.ECDSAPub != nil {
+		save.ECDSAPub.SetCurve(tss.S256())
+	}
+}
+
+func saveDataToPublicKey(save tsskeygen.LocalPartySaveData) *ecdsa.PublicKey {
+	if save.ECDSAPub == nil {
+		return nil
+	}
+	return &ecdsa.PublicKey{
+		Curve: gethcrypto.S256(),
+		X:     save.ECDSAPub.X(),
+		Y:     save.ECDSAPub.Y(),
+	}
 }
 
 func publicKeyToAddress(pub *ecdsa.PublicKey) string {

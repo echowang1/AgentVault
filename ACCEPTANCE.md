@@ -1,33 +1,33 @@
-# Task 002: TSS 密钥生成核心功能
+# Task 003: TSS 签名核心功能
 
 **负责人**: Codex
 **审核人**: Claude
 **预计时间**: 4-6 小时
-**依赖**: Task 001
+**依赖**: Task 002
 
 ---
 
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] 使用 `github.com/bnb-chain/tss-lib` 实现 2-of-2 ECDSA 密钥生成
-- [ ] 返回以太坊地址
-- [ ] 返回 Shard 1 (给 Agent)
-- [ ] 返回 Shard 2 (存储在服务端)
+- [ ] 使用 `github.com/bnb-chain/tss-lib` 实现 2-of-2 ECDSA 签名
+- [ ] 接收 Shard 1（从 Agent）和 Shard 2（从存储）
+- [ ] 返回标准 ECDSA 签名 (r, s, v)
+- [ ] 支持消息签名和交易哈希签名
 - [ ] 完整的单元测试
-- [ ] 集成测试验证签名可用
+- [ ] 签名可以被 ethers.js 验证
 
 ### 建议实现 (Should Have)
-- [ ] 支持自定义曲线 (secp256k1)
-- [ ] 密钥生成进度回调
-- [ ] 性能优化（预计算）
+- [ ] 批量签名支持（多个消息）
+- [ ] 签名进度回调
+- [ ] 签名缓存（避免重复签名相同消息）
 
 ---
 
 ## 接口定义
 
 ```go
-// server/internal/tss/keygen.go
+// server/internal/tss/signing.go
 package tss
 
 import (
@@ -35,96 +35,110 @@ import (
     "math/big"
 )
 
-// KeyGenResult 密钥生成结果
-type KeyGenResult struct {
-    // Address 以太坊地址（0x开头，42字符）
+// SignRequest 签名请求
+type SignRequest struct {
+    // Address 钱包地址
     Address string `json:"address"`
 
-    // PublicKey 完整公钥（未压缩格式）
-    PublicKey string `json:"public_key"`
+    // MessageHash 要签名的消息哈希（32 字节）
+    MessageHash string `json:"message_hash"`
 
-    // Shard1 密钥碎片 1（base64 编码）
-    // Agent 持有，需要安全存储
+    // Shard1 密钥碎片 1（base64 编码，由 Agent 提供）
     Shard1 string `json:"shard1"`
 
-    // Shard2ID 服务端存储的碎片 ID
-    // 用于后续签名时检索
+    // Shard2ID 密钥碎片 2 的存储 ID
     Shard2ID string `json:"shard2_id"`
-
-    // ChainID 链 ID (默认 1 for Ethereum)
-    ChainID *big.Int `json:"chain_id"`
 }
 
-// KeyGenerateProgress 密钥生成进度
-type KeyGenerateProgress struct {
-    Step    string `json:"step"`     // 当前步骤
-    Percent int    `json:"percent"`  // 进度百分比
+// Signature ECDSA 签名
+type Signature struct {
+    // R 签名的 r 值（十六进制字符串）
+    R string `json:"r"`
+
+    // S 签名的 s 值（十六进制字符串）
+    S string `json:"s"`
+
+    // V recovery id (0 或 1)
+    V uint8 `json:"v"`
+
+    // 完整签名 (0x 前缀，130 字符)
+    // 格式: r(64) + s(64) + v(2)
+    FullSignature string `json:"signature"`
+}
+
+// SignProgress 签名进度
+type SignProgress struct {
+    Step    string `json:"step"`
+    Percent int    `json:"percent"`
 }
 
 // ProgressCallback 进度回调函数
-type ProgressCallback func(progress KeyGenerateProgress)
+type ProgressCallback func(progress SignProgress)
 
-// KeyGenerator 密钥生成器接口
-type KeyGenerator interface {
-    // GenerateKey 生成新的 2-of-2 TSS 密钥对
-    GenerateKey(ctx context.Context) (*KeyGenResult, error)
+// Signer 签名器接口
+type Signer interface {
+    // Sign 签名消息
+    Sign(ctx context.Context, req *SignRequest) (*Signature, error)
 
-    // GenerateKeyWithProgress 带进度的密钥生成
-    GenerateKeyWithProgress(
+    // SignWithProgress 带进度的签名
+    SignWithProgress(
         ctx context.Context,
+        req *SignRequest,
         callback ProgressCallback,
-    ) (*KeyGenResult, error)
+    ) (*Signature, error)
+
+    // SignBatch 批量签名
+    SignBatch(
+        ctx context.Context,
+        reqs []*SignRequest,
+    ) ([]*Signature, error)
 }
 
-// NewKeyGenerator 创建密钥生成器
-func NewKeyGenerator() (KeyGenerator, error)
+// NewSigner 创建签名器
+func NewSigner(shardStorage ShardStorage) (Signer, error)
 ```
 
 ---
 
 ## 技术要求
 
-### 依赖包
+### 签名流程
+
+```
+1. 验证输入
+   ├── MessageHash 必须是 32 字节
+   ├── Address 格式正确
+   └── Shard1 解码成功
+
+2. 加载 Shard 2
+   ├── 从存储加载
+   └── 验证与 Address 匹配
+
+3. 协同签名
+   ├── 使用 tss-lib 的 signing 协议
+   ├── Shard1 + Shard2 协同计算
+   └── 生成 ECDSA 签名
+
+4. 返回结果
+   ├── R, S, V
+   └── 完整签名字符串
+```
+
+### V 值计算
 
 ```go
-// server/go.mod
-require (
-    github.com/bnb-chain/tss-lib v2.0.2+incompatible
-    github.com/ethereum/go-ethereum v0.13.0
-    github.com/stretchr/testify v1.9.0
-)
-```
-
-### TSS 协议
-
-使用 **GG18 协议** (Gennaro-Goldfeder 2018):
-
-```
-2-of-2 配置:
-├── parties: 2 (两个参与方)
-├── threshold: 1 (需要 2 个签名)
-└── curve: secp256k1
-```
-
-### 密钥分片存储格式
-
-```go
-// KeyShareData 密钥分片数据（内部结构，不对外暴露）
-type KeyShareData struct {
-    // ShareID 分片唯一 ID
-    ShareID string `json:"share_id"`
-
-    // PartyID 参与方 ID
-    PartyID string `json:"party_id"`
-
-    // Xi 私钥分片（大整数）
-    Xi *big.Int `json:"-"`
-
-    // PublicKey 公钥点
-    PublicKey *ecdsa.PublicKey `json:"-"`
-
-    // CreatedAt 创建时间
-    CreatedAt time.Time `json:"created_at"`
+// CalculateV 计算 recovery id
+func CalculateV(r, s *big.Int, publicKey *ecdsa.PublicKey, hash []byte) uint8 {
+    // 尝试 v = 0 和 v = 1
+    // 看哪个能恢复出正确的公钥
+    for v := uint8(0); v <= 1; v++ {
+        if recoveredPubKey := ec.RecoverToPublic(hash, r, s, v); recoveredPubKey != nil {
+            if recoveredPubKey.Equal(publicKey) {
+                return v + 27 // 以太坊使用 27/28
+            }
+        }
+    }
+    return 0
 }
 ```
 
@@ -135,97 +149,163 @@ type KeyShareData struct {
 ### 单元测试
 
 ```go
-// server/internal/tss/keygen_test.go
+// server/internal/tss/signing_test.go
 package tss
 
 import (
     "context"
+    "encoding/hex"
+    "math/big"
     "testing"
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
 )
 
-func TestNewKeyGenerator(t *testing.T) {
-    keygen, err := NewKeyGenerator()
+func TestNewSigner(t *testing.T) {
+    storage := NewMockShardStorage()
+    signer, err := NewSigner(storage)
     require.NoError(t, err)
-    assert.NotNil(t, keygen)
+    assert.NotNil(t, signer)
 }
 
-func TestGenerateKey_ValidResult(t *testing.T) {
-    keygen, err := NewKeyGenerator()
-    require.NoError(t, err)
-
-    result, err := keygen.GenerateKey(context.Background())
-    require.NoError(t, err)
-
-    // 验证地址格式
-    assert.Regexp(t, "^0x[a-fA-F0-9]{40}$", result.Address)
-
-    // 验证公钥
-    assert.NotEmpty(t, result.PublicKey)
-
-    // 验证 Shard 1
-    assert.NotEmpty(t, result.Shard1)
-    shard1Bytes, err := base64.StdEncoding.DecodeString(result.Shard1)
-    require.NoError(t, err)
-    assert.NotEmpty(t, shard1Bytes)
-
-    // 验证 Shard 2 ID
-    assert.NotEmpty(t, result.Shard2ID)
-}
-
-func TestGenerateKey_Deterministic(t *testing.T) {
-    // 相同的随机种子应该生成相同的密钥
-    t.Skip("需要先确定随机种子策略")
-}
-
-func TestGenerateKey_AddrressChecksum(t *testing.T) {
+func TestSign_ValidSignature(t *testing.T) {
+    // 准备：先创建密钥
     keygen, err := NewKeyGenerator()
     require.NoError(t, err)
 
-    result, err := keygen.GenerateKey(context.Background())
+    keyResult, err := keygen.GenerateKey(context.Background())
     require.NoError(t, err)
 
-    // 验证 EIP-55 checksum
-    assert.Equal(t, result.Address, toChecksumAddress(result.Address))
+    // 存储 Shard 2
+    storage := NewMockShardStorage()
+    storage.Store(keyResult.Shard2ID, keyResult.Shard2)
+
+    // 创建签名器
+    signer, err := NewSigner(storage)
+    require.NoError(t, err)
+
+    // 准备签名请求
+    messageHash := keccak256Hash([]byte("test message"))
+    req := &SignRequest{
+        Address:     keyResult.Address,
+        MessageHash: hex.EncodeToString(messageHash),
+        Shard1:      keyResult.Shard1,
+        Shard2ID:    keyResult.Shard2ID,
+    }
+
+    // 执行签名
+    sig, err := signer.Sign(context.Background(), req)
+    require.NoError(t, err)
+
+    // 验证签名格式
+    assert.NotEmpty(t, sig.R)
+    assert.NotEmpty(t, sig.S)
+    assert.Contains(t, []uint8{27, 28}, sig.V)
+    assert.Len(t, sig.FullSignature, 132) // 0x + 130 字符
+
+    // 验证签名有效性（使用 go-ethereum）
+    rBytes, _ := hex.DecodeString(sig.R)
+    sBytes, _ := hex.DecodeString(sig.S)
+    rInt := new(big.Int).SetBytes(rBytes)
+    sInt := new(big.Int).SetBytes(sBytes)
+
+    pubKey, err := recoverPubKey(messageHash, rInt, sInt, sig.V-27)
+    require.NoError(t, err)
+
+    // 比较地址
+    recoveredAddr := crypto.PubkeyToAddress(*pubKey)
+    assert.Equal(t, keyResult.Address, recoveredAddr.Hex())
+}
+
+func TestSign_InvalidHash(t *testing.T) {
+    storage := NewMockShardStorage()
+    signer, err := NewSigner(storage)
+    require.NoError(t, err)
+
+    req := &SignRequest{
+        MessageHash: "invalid",
+        Shard1:      "base64data",
+    }
+
+    _, err = signer.Sign(context.Background(), req)
+    assert.Error(t, err)
+    assert.Equal(t, ErrInvalidHash, err)
+}
+
+func TestSign_ShardNotFound(t *testing.T) {
+    storage := NewMockShardStorage()
+    signer, err := NewSigner(storage)
+    require.NoError(t, err)
+
+    req := &SignRequest{
+        Address:     "0x1234567890123456789012345678901234567890",
+        MessageHash: hex.EncodeToString(make([]byte, 32)),
+        Shard1:      "base64data",
+        Shard2ID:    "non-existent",
+    }
+
+    _, err = signer.Sign(context.Background(), req)
+    assert.Error(t, err)
+    assert.Equal(t, ErrShardNotFound, err)
 }
 ```
 
 ### 集成测试
 
 ```go
-// server/internal/tss/keygen_integration_test.go
+// server/internal/tss/signing_integration_test.go
 package tss
 
-import (
-    "context"
-    "testing"
-    "github.com/ethereum/go-ethereum/crypto"
-)
-
-func TestKeyGenAndSignIntegration(t *testing.T) {
+func TestKeyGenAndSignEndToEnd(t *testing.T) {
     if testing.Short() {
         t.Skip("跳过集成测试")
     }
+
+    ctx := context.Background()
 
     // 1. 生成密钥
     keygen, err := NewKeyGenerator()
     require.NoError(t, err)
 
-    result, err := keygen.GenerateKey(context.Background())
+    keyResult, err := keygen.GenerateKey(ctx)
     require.NoError(t, err)
 
-    // 2. 解码 Shard 1
-    shard1Bytes, err := base64.StdEncoding.DecodeString(result.Shard1)
+    // 2. 存储 Shard 2
+    storage := NewMemoryShardStorage()
+    err = storage.Store(keyResult.Shard2ID, keyResult.Shard2)
     require.NoError(t, err)
 
-    // 3. 从存储加载 Shard 2 (模拟)
-    shard2Bytes, err := loadShard2(result.Shard2ID)
+    // 3. 创建签名器并签名
+    signer, err := NewSigner(storage)
     require.NoError(t, err)
 
-    // 4. 验证两个分片可以恢复私钥并签名
-    // (这个测试需要签名模块，先占位)
-    t.Skip("等待签名模块实现")
+    message := []byte("Hello, Agent MPC Wallet!")
+    messageHash := crypto.Keccak256Hash(message)
+
+    req := &SignRequest{
+        Address:     keyResult.Address,
+        MessageHash: hex.EncodeToString(messageHash.Bytes()),
+        Shard1:      keyResult.Shard1,
+        Shard2ID:    keyResult.Shard2ID,
+    }
+
+    sig, err := signer.Sign(ctx, req)
+    require.NoError(t, err)
+
+    // 4. 验证签名
+    rBytes, _ := hex.DecodeString(sig.R)
+    sBytes, _ := hex.DecodeString(sig.S)
+    rInt := new(big.Int).SetBytes(rBytes)
+    sInt := new(big.Int).SetBytes(sBytes)
+
+    pubKeyBytes, err := crypto.Ecrecover(messageHash.Bytes(), rInt, sInt, sig.V-27)
+    require.NoError(t, err)
+
+    pubKey, err := crypto.UnmarshalPubkey(pubKeyBytes)
+    require.NoError(t, err)
+
+    recoveredAddr := crypto.PubkeyToAddress(*pubKey)
+    assert.Equal(t, keyResult.Address, recoveredAddr.Hex())
 }
 ```
 
@@ -233,30 +313,31 @@ func TestKeyGenAndSignIntegration(t *testing.T) {
 
 ## 性能要求
 
-- [ ] 密钥生成在 10 秒内完成（冷启动）
-- [ ] 密钥生成在 3 秒内完成（预计算后）
-- [ ] 内存占用不超过 100MB
+- [ ] 单次签名在 3 秒内完成
+- [ ] 批量签名（10 个）在 10 秒内完成
+- [ ] 内存占用不超过 50MB
 
 ---
 
 ## 安全要求
 
-- [ ] Shard 1 返回前 base64 编码
-- [ ] Shard 2 不暴露在 API 响应中
-- [ ] 私钥分片永不序列化为 JSON
-- [ ] 使用 crypto/rand 生成随机数
-- [ ] 错误信息不泄露密钥数据
+- [ ] 验证 MessageHash 长度（必须是 32 字节）
+- [ ] 验证 Shard 1 与 Address 匹配
+- [ ] 私钥分片永不暴露在日志中
+- [ ] 签名后立即清理内存中的敏感数据
+- [ ] 使用 constant-time 比较避免时序攻击
 
 ---
 
 ## 错误处理
 
 ```go
-// 定义错误类型
 var (
-    ErrKeyGenFailed      = errors.New("密钥生成失败")
-    ErrInvalidPartyCount = errors.New("参与方数量必须为 2")
-    ErrContextCanceled   = errors.New("操作被取消")
+    ErrInvalidHash      = errors.New("消息哈希必须是 32 字节")
+    ErrInvalidSignature = errors.New("无效签名")
+    ErrShardNotFound    = errors.New("密钥分片未找到")
+    ErrShardMismatch    = errors.New("密钥分片不匹配")
+    ErrSignFailed       = errors.New("签名失败")
 )
 ```
 
@@ -266,55 +347,10 @@ var (
 
 ```
 server/internal/tss/
-├── keygen.go              # 主实现
-├── keygen_test.go         # 单元测试
-├── keygen_integration_test.go  # 集成测试
-├── types.go               # 共享类型定义
-└── precompute.go          # 预计算优化（可选）
-```
-
----
-
-## 实现提示
-
-### 1. 预计算优化
-
-```go
-// PreParams 预计算参数（耗时操作）
-type PreParams struct {
-    // tss-lib 的预计算参数
-}
-
-// GeneratePreParams 生成预计算参数
-// 建议在服务启动时调用
-func GeneratePreParams(timeout time.Duration) (*PreParams, error) {
-    // ...
-}
-```
-
-### 2. 地址计算
-
-```go
-// PublicKeyToAddress 将公钥转换为以太坊地址
-func PublicKeyToAddress(pubKey *ecdsa.PublicKey) string {
-    // 1. Keccak256(公钥无前缀 04)
-    // 2. 取后 20 字节
-    // 3. 添加 0x 前缀
-    // 4. EIP-55 checksum
-}
-```
-
-### 3. 分片序列化
-
-```go
-// MarshalShare 序列化密钥分片
-func MarshalShare(share *KeyShareData) (string, error) {
-    // 使用 protobuf 或 json
-    // 加密后再 base64
-}
-
-// UnmarshalShare 反序列化密钥分片
-func UnmarshalShare(data string) (*KeyShareData, error)
+├── signing.go              # 主实现
+├── signing_test.go         # 单元测试
+├── signing_integration_test.go  # 集成测试
+└── mock_storage.go         # Mock 存储（用于测试）
 ```
 
 ---
@@ -324,46 +360,45 @@ func UnmarshalShare(data string) (*KeyShareData, error)
 ### 功能验证
 - [ ] 所有单元测试通过
 - [ ] 集成测试通过
-- [ ] 生成的地址可以被 ethers.js 验证
+- [ ] 签名可以被 ethers.js 验证
 
 ### 代码质量
 - [ ] `go test ./...` 通过
 - [ ] `golangci-lint run` 通过
 - [ ] 测试覆盖率 > 80%
 
-### 文档
-- [ ] 函数有 godoc 注释
-- [ ] 复杂逻辑有行内注释
-- [ ] 更新 README.md（如有新增配置）
+### 验证脚本
+- [ ] 提供验证脚本（使用 cast 或 ethers.js）
 
 ---
 
 ## 验证命令
 
 ```bash
-# 运行单元测试
+# 运行测试
 cd server && go test -v ./internal/tss/...
 
-# 运行集成测试
-cd server && go test -v ./internal/tss/... -run Integration
+# 使用 ethers.js 验证（在本地测试网）
+node scripts/verify-signature.js <address> <message> <signature>
 
-# 检查覆盖率
-cd server && go test -coverprofile=coverage.out ./internal/tss/...
-
-# 本地验证地址（使用 ethers.js 或 cast）
-cast balance <生成的地址> --rpc-url https://eth.llamarpc.com
+# 或使用 cast
+cast verify-signature \
+  <address> \
+  <message-hash> \
+  <signature> \
+  --rpc-url https://eth-sepolia.publicnode.com
 ```
 
 ---
 
 ## 下一步
 
-完成后，可以开始 **Task 003: TSS 签名核心功能**
+完成后，可以开始 **Task 004: HTTP API 服务**
 
 ---
 
 ## 参考资料
 
-- [bnb-chain/tss-lib README](https://github.com/bnb-chain/tss-lib)
-- [GG18 论文](https://eprint.iacr.org/2019/114.pdf)
-- [secp256k1 曲线参数](https://en.bitcoin.it/wiki/Secp256k1)
+- [bnb-chain/tss-lib signing](https://github.com/bnb-chain/tss-lib/tree/master/ecdsa/signing)
+- [EIP-191 签名标准](https://eips.ethereum.org/EIPS/eip-191)
+- [EIP-155 交易签名](https://eips.ethereum.org/EIPS/eip-155)
