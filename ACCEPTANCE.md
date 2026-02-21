@@ -1,548 +1,701 @@
-# Task 010: 端到端测试
+# Task 011: API 文档 + 部署指南
 
 **负责人**: Codex
 **审核人**: Claude
-**预计时间**: 3-4 小时
-**依赖**: Task 008, 009
+**预计时间**: 2-3 小时
+**依赖**: Task 010
 
 ---
 
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] 完整的 E2E 测试流程
-- [ ] 测试网验证（Sepolia/Base Sepolia）
-- [ ] 测试真实交易发送和确认
-- [ ] 测试报告生成
-- [ ] CI/CD 集成
+- [ ] API 文档（所有端点）
+- [ ] SDK 使用文档
+- [ ] Docker 部署指南
+- [ ] 环境变量说明
+- [ ] 快速开始指南
+- [ ] 故障排查指南
 
 ### 建议实现 (Should Have)
-- [ ] 性能测试
-- [ ] 压力测试
-- [ ] 多链测试
+- [ ] Postman 集合
+- [ ] 架构图
+- [ ] 性能优化指南
+- [ ] 生产环境最佳实践
 
 ---
 
-## 测试场景
-
-### 场景 1: 创建钱包 → 签名消息 → 验证
+## 文档结构
 
 ```
-1. 启动 MPC 服务
-2. 使用 SDK 创建钱包
-3. 签名测试消息
-4. 使用 ethers.js 验证签名
-5. 检查恢复地址匹配
-```
-
-### 场景 2: 创建钱包 → 签名交易 → 发送到测试网
-
-```
-1. 启动 MPC 服务
-2. 使用 SDK 创建钱包
-3. 向钱包转入测试 ETH（水龙头）
-4. 签名测试交易
-5. 发送到测试网
-6. 等待交易确认
-7. 验证交易状态
-```
-
-### 场景 3: 策略引擎测试
-
-```
-1. 创建钱包
-2. 设置策略（单笔限额 0.01 ETH）
-3. 尝试签名 0.001 ETH 交易 → 成功
-4. 尝试签名 0.1 ETH 交易 → 失败
-5. 设置白名单
-6. 尝试签名给白名单地址 → 成功
-7. 尝试签名给非白名单地址 → 失败
-```
-
-### 场景 4: 多钱包并发测试
-
-```
-1. 创建 5 个钱包
-2. 并发签名请求
-3. 验证所有签名正确
-4. 验证没有密钥泄露
+docs/
+├── api.md                     # API 文档
+├── sdk.md                     # SDK 使用指南
+├── deployment.md              # 部署指南
+├── architecture.md            # 架构设计
+├── security.md                # 安全最佳实践
+├── troubleshooting.md         # 故障排查
+└── openapi.json               # OpenAPI 规范
 ```
 
 ---
 
-## 测试代码
+## API 文档 (api.md)
 
-```typescript
-// tests/e2e.test.ts
+```markdown
+# MPC Wallet API 文档
 
-import { describe, it, expect, beforeAll } from 'vitest';
-import { MPCWallet } from '@agent-mpc-wallet/sdk';
-import { ethers, verifyMessage, recoverAddress } from 'ethers';
-import { spawn } from 'child_process';
-import { promisify } from 'util';
+## 基础信息
 
-const execAsync = promisify(require('child_process').exec);
+- **Base URL**: `http://localhost:8080`
+- **API Version**: v1
+- **Content-Type**: `application/json`
 
-describe('MPC Wallet E2E Tests', () => {
-  let serverProcess: any;
-  let serverUrl: string;
-  let apiKey: string = 'test-api-key-e2e';
+## 认证
 
-  beforeAll(async () => {
-    // 1. 启动测试服务器
-    serverUrl = 'http://localhost:8080';
-    serverProcess = spawn('go', ['run', '../server/cmd/server/main.go'], {
-      env: {
-        ...process.env,
-        MPC_API_KEYS: apiKey,
-        DB_PATH: ':memory:',
-      },
-      stdio: 'pipe',
-    });
+所有 API 请求需要在 Header 中包含 API Key:
 
-    // 等待服务器启动
-    await new Promise(resolve => setTimeout(resolve, 3000));
+\`\`\`http
+Authorization: Bearer YOUR_API_KEY
+\`\`\`
 
-    // 健康检查
-    const response = await fetch(`${serverUrl}/health`);
-    expect(response.ok).toBe(true);
-  }, 30000);
+## 端点
 
-  afterAll(async () => {
-    if (serverProcess) {
-      serverProcess.kill();
-    }
-  });
+### 1. 健康检查
 
-  describe('Scenario 1: Create Wallet and Sign Message', () => {
-    it('should create wallet and sign message successfully', async () => {
-      // 创建钱包
-      const wallet = new MPCWallet({
-        client: {
-          baseURL: serverUrl,
-          apiKey: apiKey,
-        },
-      });
+检查服务健康状态。
 
-      const address = await wallet.create();
-      expect(address).toMatch(/^0x[a-fA-F0-9]{40}$/);
+\`\`\`http
+GET /health
+\`\`\`
 
-      // 签名消息
-      const message = 'Hello, MPC Wallet!';
-      const signature = await wallet.signMessage(message);
+**响应示例**:
 
-      expect(signature).toMatch(/^0x[a-fA-F0-9]{130}$/);
+\`\`\`json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "timestamp": "2026-02-21T10:00:00Z"
+}
+\`\`\`
 
-      // 验证签名
-      const recovered = verifyMessage(message, signature);
-      expect(recovered.toLowerCase()).toBe(address.toLowerCase());
-    });
+### 2. 创建钱包
 
-    it('should sign hash correctly', async () => {
-      const wallet = new MPCWallet({
-        client: {
-          baseURL: serverUrl,
-          apiKey: apiKey,
-        },
-      });
+创建新的 MPC 钱包。
 
-      const address = await wallet.create();
-
-      const message = 'Test message for hash signing';
-      const hash = ethers.keccak256(ethers.toUtf8Bytes(message));
-
-      const signature = await wallet.signHash(hash as any);
-
-      // 恢复签名者
-      const recovered = recoverAddress(hash, signature);
-      expect(recovered.toLowerCase()).toBe(address.toLowerCase());
-    });
-  });
-
-  describe('Scenario 2: Sign and Send Transaction', () => {
-    it('should sign transaction and send to testnet', async () => {
-      const wallet = new MPCWallet({
-        client: {
-          baseURL: serverUrl,
-          apiKey: apiKey,
-        },
-      });
-
-      const address = await wallet.create();
-
-      // 获取测试 ETH（如果余额不足）
-      const provider = ethers.getDefaultProvider('sepolia');
-      const balance = await provider.getBalance(address);
-
-      if (balance < ethers.parseEther('0.01')) {
-        console.log('⚠️  Insufficient test ETH. Please fund:', address);
-        // 跳过交易发送测试
-        return;
-      }
-
-      // 构建交易
-      const tx = {
-        to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const,
-        value: ethers.parseEther('0.001'),
-        gasLimit: 21000,
-        chainId: 11155111, // Sepolia
-      };
-
-      // 签名交易
-      const signature = await wallet.signTransaction(tx);
-
-      // 发送交易
-      const txResponse = await provider.broadcastTransaction(signature);
-      console.log('Transaction hash:', txResponse.hash);
-
-      // 等待确认
-      const receipt = await txResponse.wait();
-      expect(receipt).toBeDefined();
-      expect(receipt?.status).toBe(1);
-    }, 60000);
-  });
-
-  describe('Scenario 3: Policy Engine', () => {
-    it('should enforce single transaction limit', async () => {
-      const wallet = new MPCWallet({
-        client: {
-          baseURL: serverUrl,
-          apiKey: apiKey,
-        },
-      });
-
-      const address = await wallet.create();
-
-      // 设置策略：单笔限额 0.01 ETH
-      await wallet.setPolicy({
-        singleTxLimit: ethers.parseEther('0.01').toString(),
-      });
-
-      // 小额交易应该成功
-      const smallTx = {
-        to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const,
-        value: ethers.parseEther('0.001'),
-      };
-
-      await expect(wallet.signTransaction(smallTx)).resolves.toBeDefined();
-
-      // 大额交易应该失败
-      const largeTx = {
-        to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const,
-        value: ethers.parseEther('0.1'),
-      };
-
-      await expect(wallet.signTransaction(largeTx)).rejects.toThrow();
-    });
-
-    it('should enforce whitelist', async () => {
-      const wallet = new MPCWallet({
-        client: {
-          baseURL: serverUrl,
-          apiKey: apiKey,
-        },
-      });
-
-      const address = await wallet.create();
-
-      const uniswap = '0xE592427A0AEce92De3Edee1F18E0157C05861564' as const;
-      const random = '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const;
-
-      // 设置白名单
-      await wallet.setPolicy({
-        whitelist: [uniswap],
-      });
-
-      // 白名单地址应该成功
-      const whitelistTx = {
-        to: uniswap,
-        value: ethers.parseEther('0.001'),
-      };
-
-      await expect(wallet.signTransaction(whitelistTx)).resolves.toBeDefined();
-
-      // 非白名单地址应该失败
-      const nonWhitelistTx = {
-        to: random,
-        value: ethers.parseEther('0.001'),
-      };
-
-      await expect(wallet.signTransaction(nonWhitelistTx)).rejects.toThrow();
-    });
-  });
-
-  describe('Scenario 4: Concurrent Operations', () => {
-    it('should handle multiple concurrent wallets', async () => {
-      const walletCount = 5;
-      const wallets = await Promise.all(
-        Array.from({ length: walletCount }, () =>
-          new MPCWallet({
-            client: { baseURL: serverUrl, apiKey },
-          }).create(),
-        ),
-      );
-
-      expect(wallets).toHaveLength(walletCount);
-      expect(new Set(wallets).size).toBe(walletCount); // 所有地址不同
-    });
-
-    it('should handle concurrent signing requests', async () => {
-      const wallet = new MPCWallet({
-        client: {
-          baseURL: serverUrl,
-          apiKey: apiKey,
-        },
-      });
-
-      const address = await wallet.create();
-
-      // 并发签名 10 个消息
-      const signatures = await Promise.all(
-        Array.from({ length: 10 }, (_, i) =>
-          wallet.signMessage(`Message ${i}`),
-        ),
-      );
-
-      expect(signatures).toHaveLength(10);
-
-      // 验证所有签名
-      signatures.forEach((sig, i) => {
-        expect(sig).toMatch(/^0x[a-fA-F0-9]{130}$/);
-        const recovered = verifyMessage(`Message ${i}`, sig);
-        expect(recovered.toLowerCase()).toBe(address.toLowerCase());
-      });
-    });
-  });
-
-  describe('Scenario 5: Storage Persistence', () => {
-    it('should persist and load wallet data', async () => {
-      const storage = new MemoryWalletStorage();
-      const wallet = new MPCWallet({
-        client: { baseURL: serverUrl, apiKey },
-        storage,
-      });
-
-      // 创建钱包
-      const address = await wallet.create();
-
-      // 断开
-      wallet.disconnect();
-
-      // 创建新实例并加载
-      const wallet2 = new MPCWallet({
-        client: { baseURL: serverUrl, apiKey },
-        storage,
-      });
-
-      const loaded = await wallet2.load(address);
-      expect(loaded).toBe(true);
-      expect(wallet2.getAddress()).toBe(address);
-
-      // 验证可以签名
-      const signature = await wallet2.signMessage('test');
-      expect(signature).toBeDefined();
-    });
-  });
-});
-```
-
----
-
-## 性能测试
-
-```typescript
-// tests/performance.test.ts
-
-import { describe, it, expect } from 'vitest';
-import { MPCWallet } from '@agent-mpc-wallet/sdk';
-
-describe('Performance Tests', () => {
-  it('should create wallet in under 10 seconds', async () => {
-    const start = Date.now();
-
-    const wallet = new MPCWallet({
-      client: { baseURL: 'http://localhost:8080', apiKey: 'test' },
-    });
-
-    await wallet.create();
-
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeLessThan(10000);
-    console.log(`Wallet creation took ${elapsed}ms`);
-  });
-
-  it('should sign message in under 3 seconds', async () => {
-    const wallet = new MPCWallet({
-      client: { baseURL: 'http://localhost:8080', apiKey: 'test' },
-    });
-
-    await wallet.create();
-
-    const start = Date.now();
-    await wallet.signMessage('performance test');
-    const elapsed = Date.now() - start;
-
-    expect(elapsed).toBeLessThan(3000);
-    console.log(`Signing took ${elapsed}ms`);
-  });
-
-  it('should handle 100 transactions in under 60 seconds', async () => {
-    const wallet = new MPCWallet({
-      client: { baseURL: 'http://localhost:8080', apiKey: 'test' },
-    });
-
-    await wallet.create();
-
-    const start = Date.now();
-
-    const signatures = await Promise.all(
-      Array.from({ length: 100 }, (_, i) =>
-        wallet.signMessage(`Message ${i}`),
-      ),
-    );
-
-    const elapsed = Date.now() - start;
-    expect(signatures).toHaveLength(100);
-    expect(elapsed).toBeLessThan(60000);
-
-    console.log(`100 signatures took ${elapsed}ms`);
-    console.log(`Average: ${elapsed / 100}ms per signature`);
-  });
-});
-```
-
----
-
-## 测试配置
-
-```typescript
-// vitest.config.ts
-
-import { defineConfig } from 'vitest/config';
-
-export default defineConfig({
-  test: {
-    globals: true,
-    environment: 'node',
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      exclude: [
-        'node_modules/',
-        'tests/',
-        '**/*.test.ts',
-        '**/*.spec.ts',
-        'examples/',
-      ],
-    },
-    setupFiles: ['./tests/setup.ts'],
-  },
-});
-```
-
-```typescript
-// tests/setup.ts
-
-import { beforeAll } from 'vitest';
-
-beforeAll(() => {
-  // 全局测试设置
-  console.log('Starting E2E tests...');
-  console.log('Make sure the MPC server is running!');
-});
-```
-
----
-
-## CI/CD 集成
-
-```yaml
-# .github/workflows/e2e.yml
-
-name: E2E Tests
-
-on:
-  push:
-    branches: [main, task/**]
-  pull_request:
-    branches: [main]
-
-jobs:
-  e2e:
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: test_db
-          POSTGRES_USER: test
-          POSTGRES_PASSWORD: test
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-          cache: true
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: sdk/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          cd server && go mod download
-          cd sdk && npm ci
-
-      - name: Build server
-        run: |
-          cd server && go build -o ../bin/server ./cmd/server
-
-      - name: Start server
-        run: |
-          mkdir -p data
-          export MPC_API_KEYS=test-key
-          export DB_PATH=./data/test.db
-          ./bin/server &
-          sleep 5
-
-      - name: Run E2E tests
-        run: |
-          cd sdk && npm run test:e2e
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./sdk/coverage/e2e coverage-final.json
-```
-
----
-
-## 测试脚本
-
-```json
-// package.json
+\`\`\`http
+POST /api/v1/wallet/create
+Content-Type: application/json
+Authorization: Bearer YOUR_API_KEY
 
 {
-  "scripts": {
-    "test": "vitest",
-    "test:unit": "vitest run --coverage",
-    "test:e2e": "vitest run tests/e2e.test.ts",
-    "test:perf": "vitest run tests/performance.test.ts",
-    "test:all": "npm-run-all test:*"
+  "chain_id": "1"
+}
+\`\`\`
+
+**请求参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| chain_id | number | 否 | 链 ID，默认 1 (Ethereum) |
+
+**响应示例**:
+
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "address": "0x1234567890123456789012345678901234567890",
+    "public_key": "0x...",
+    "shard1": "base64...",
+    "shard2_id": "uuid-..."
   }
+}
+\`\`\`
+
+### 3. 签名交易
+
+签名交易或消息。
+
+\`\`\`http
+POST /api/v1/wallet/sign
+Content-Type: application/json
+Authorization: Bearer YOUR_API_KEY
+
+{
+  "address": "0x1234...7890",
+  "message_hash": "0x...",
+  "shard1": "base64..."
+}
+\`\`\`
+
+**请求参数**:
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| address | string | 是 | 钱包地址 |
+| message_hash | string | 是 | 消息哈希（32 字节，十六进制） |
+| shard1 | string | 是 | 密钥碎片 1（base64 编码） |
+
+**响应示例**:
+
+\`\`\`json
+{
+  "success": true,
+  "data": {
+    "signature": "0x...",
+    "r": "0x...",
+    "s": "0x...",
+    "v": 28
+  }
+}
+\`\`\`
+
+**错误响应**:
+
+\`\`\`json
+{
+  "success": false,
+  "error": {
+    "code": "EXCEEDS_SINGLE_TX_LIMIT",
+    "message": "Transaction exceeds single transaction limit",
+    "details": {
+      "limit": "1000000000000000000",
+      "value": "2000000000000000000"
+    }
+  }
+}
+\`\`\`
+
+### 4. 查询钱包
+
+获取钱包信息。
+
+\`\`\`http
+GET /api/v1/wallet/:address
+Authorization: Bearer YOUR_API_KEY
+\`\`\`
+
+### 5. 设置策略
+
+设置钱包策略。
+
+\`\`\`http
+PUT /api/v1/wallet/:address/policy
+Content-Type: application/json
+Authorization: Bearer YOUR_API_KEY
+
+{
+  "single_tx_limit": "1000000000000000000",
+  "daily_limit": "10000000000000000000",
+  "whitelist": ["0xUniswap...", "0xCurve..."],
+  "daily_tx_limit": 100
+}
+\`\`\`
+
+### 6. 查询策略
+
+获取钱包策略。
+
+\`\`\`http
+GET /api/v1/wallet/:address/policy
+Authorization: Bearer YOUR_API_KEY
+\`\`\`
+
+### 7. 查询使用情况
+
+获取每日使用情况。
+
+\`\`\`http
+GET /api/v1/wallet/:address/usage
+Authorization: Bearer YOUR_API_KEY
+\`\`\`
+
+## 错误代码
+
+| 代码 | 说明 |
+|------|------|
+| UNAUTHORIZED | API Key 无效 |
+| INVALID_REQUEST | 请求参数无效 |
+| WALLET_NOT_FOUND | 钱包不存在 |
+| INVALID_HASH | 消息哈希格式无效 |
+| SHARD_NOT_FOUND | 密钥碎片未找到 |
+| EXCEEDS_SINGLE_TX_LIMIT | 超过单笔交易限额 |
+| EXCEEDS_DAILY_LIMIT | 超过每日交易限额 |
+| EXCEEDS_DAILY_TX_LIMIT | 超过每日交易笔数限额 |
+| ADDRESS_NOT_WHITELISTED | 目标地址不在白名单中 |
+| OUTSIDE_TIME_WINDOW | 不在允许的时间窗口内 |
+| SIGN_FAILED | 签名失败 |
+```
+
+---
+
+## 部署指南 (deployment.md)
+
+```markdown
+# MPC Wallet 部署指南
+
+## Docker 部署
+
+### 快速开始
+
+\`\`\`bash
+# 1. 构建镜像
+docker build -t agent-mpc-wallet:latest -f docker/Dockerfile .
+
+# 2. 运行容器
+docker run -d \
+  -p 8080:8080 \
+  -e MPC_API_KEYS=your-key-1,your-key-2 \
+  -e SHARD_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+  -v $(pwd)/data:/app/data \
+  agent-mpc-wallet:latest
+\`\`\`
+
+### Docker Compose
+
+\`\`\`bash
+docker-compose -f docker/docker-compose.yml up -d
+\`\`\`
+
+## 环境变量
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| MPC_API_KEYS | 是 | - | 逗号分隔的 API Key 列表 |
+| SHARD_ENCRYPTION_KEY | 是 | - | Shard 2 加密密钥（base64 编码，32 字节） |
+| DB_PATH | 否 | ./data/mpc-wallet.db | SQLite 数据库路径 |
+| SERVER_HOST | 否 | 0.0.0.0 | 服务器监听地址 |
+| SERVER_PORT | 否 | 8080 | 服务器端口 |
+| LOG_LEVEL | 否 | info | 日志级别 |
+
+## 生产环境部署
+
+### 使用 PostgreSQL
+
+\`\`\`bash
+docker run -d \\
+  -e DB_TYPE=postgres \\
+  -e DB_HOST=postgres.example.com \\
+  -e DB_PORT=5432 \\
+  -e DB_NAME=mpc_wallet \\
+  -e DB_USER=mpc \\
+  -e DB_PASSWORD=your-password \\
+  -e SHARD_ENCRYPTION_KEY=$(openssl rand -base64 32) \\
+  agent-mpc-wallet:latest
+\`\`\`
+
+### 使用 Kubernetes
+
+\`\`\`yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mpc-wallet
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mpc-wallet
+  template:
+    metadata:
+      labels:
+        app: mpc-wallet
+    spec:
+      containers:
+      - name: mpc-wallet
+        image: agent-mpc-wallet:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MPC_API_KEYS
+          valueFrom:
+            secretKeyRef:
+              name: mpc-secrets
+              key: api-keys
+        - name: SHARD_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mpc-secrets
+              key: encryption-key
+        - name: DB_TYPE
+          value: postgres
+        - name: DB_HOST
+          value: postgres-service
+        volumeMounts:
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: mpc-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mpc-wallet
+spec:
+  selector:
+    app: mpc-wallet
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: LoadBalancer
+\`\`\`
+
+## 健康检查
+
+\`\`\`bash
+# 健康检查端点
+curl http://localhost:8080/health
+
+# 预期响应
+{"status":"ok","version":"0.1.0","timestamp":"..."}
+\`\`\`
+
+## 日志
+
+\`\`\`bash
+# 查看日志
+docker logs mpc-wallet -f
+
+# 或者使用 docker-compose
+docker-compose logs -f mpc-wallet
+\`\`\`
+
+## 备份
+
+### 数据库备份
+
+\`\`\`bash
+# SQLite
+cp data/mpc-wallet.db backup/mpc-wallet-$(date +%Y%m%d).db
+
+# PostgreSQL
+pg_dump -h localhost -U mpc mpc_wallet > backup/mpc-$(date +%Y%m%d).sql
+\`\`\`
+
+### 恢复
+
+\`\`\`bash
+# SQLite
+cp backup/mpc-wallet-20260221.db data/mpc-wallet.db
+
+# PostgreSQL
+psql -h localhost -U mpc mpc_wallet < backup/mpc-20260221.sql
+\`\`\`
+```
+
+---
+
+## 快速开始指南 (README.md 更新)
+
+```markdown
+# Agent MPC Wallet
+
+> 开源的 AI Agent MPC 钱包 SDK
+
+[![Go Tests](https://github.com/YOUR_USERNAME/agent-mpc-wallet/actions/workflows/go-test.yml/badge.svg)]
+[![TS Tests](https://github.com/YOUR_USERNAME/agent-mpc-wallet/actions/workflows/ts-test.yml/badge.svg)]
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]
+
+## 特性
+
+- 🔐 2-of-2 TSS 阈值签名
+- 🚀 5 分钟快速集成
+- 📡 HTTP/REST API
+- 🔌 TypeScript SDK
+- 🐳 Docker 一键部署
+- 🛡️ 内置策略引擎
+
+## 快速开始
+
+### 1. 启动服务
+
+\`\`\`bash
+docker run -d \\
+  -p 8080:8080 \\
+  -e MPC_API_KEYS=your-api-key \\
+  -e SHARD_ENCRYPTION_KEY=$(openssl rand -base64 32) \\
+  ghcr.io/YOUR_USERNAME/agent-mpc-wallet:latest
+\`\`\`
+
+### 2. 安装 SDK
+
+\`\`\`bash
+npm install @agent-mpc-wallet/sdk
+\`\`\`
+
+### 3. 使用
+
+\`\`\`typescript
+import { MPCWallet } from '@agent-mpc-wallet/sdk';
+
+const wallet = new MPCWallet({
+  client: {
+    baseURL: 'http://localhost:8080',
+    apiKey: 'your-api-key',
+  },
+});
+
+// 创建钱包
+const address = await wallet.create();
+console.log('Wallet address:', address);
+
+// 签名消息
+const signature = await wallet.signMessage('Hello, World!');
+console.log('Signature:', signature);
+\`\`\`
+
+## 文档
+
+- [API 文档](docs/api.md)
+- [SDK 指南](docs/sdk.md)
+- [部署指南](docs/deployment.md)
+- [架构设计](docs/architecture.md)
+
+## 示例
+
+- [基础示例](examples/basic/README.md)
+- [ElizaOS 集成](examples/with-eliza/README.md)
+- [GOAT SDK 集成](examples/with-goat/README.md)
+
+## 许可证
+
+MIT License - see [LICENSE](LICENSE) for details.
+```
+
+---
+
+## 架构文档 (architecture.md)
+
+```markdown
+# MPC Wallet 架构设计
+
+## 系统架构
+
+\`\`\`
+┌─────────────────────────────────────────────────────────────┐
+│  Agent 应用层                                              │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │  ElizaOS    │  │  GOAT SDK   │  │  Custom App │         │
+│  └─────────────┘  └─────────────┘  └─────────────┘         │
+├─────────────────────────────────────────────────────────────┤
+│  SDK 层                                                     │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  MPCWallet (TypeScript)                               ││
+│  │  - Shard 1 管理                                        ││
+│  │  - 策略检查                                            ││
+│  │  - HTTP 客户端                                         ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  API 层 (HTTP/REST)                                        │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  POST /api/v1/wallet/create                           ││
+│  │  POST /api/v1/wallet/sign                             ││
+│  │  PUT  /api/v1/wallet/:address/policy                  ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  服务层                                                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                 │
+│  │   TSS    │  │  Policy  │  │ Storage  │                 │
+│  │   KeyGen │  │  Engine  │  │ SQLite   │                 │
+│  │  Signing │  │          │  │ + AES    │                 │
+│  └──────────┘  └──────────┘  └──────────┘                 │
+├─────────────────────────────────────────────────────────────┤
+│  数据层                                                    │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │  Shard 2 (AES-256-GCM 加密存储)                         ││
+│  │  Wallet Info                                           ││
+│  │  Policy Data                                           ││
+│  │  Daily Usage                                           ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+\`\`\`
+
+## TSS 流程
+
+### 密钥生成
+
+\`\`\`
+1. Agent 生成临时密钥对
+2. 发送 KeyGen 请求到 MPC 服务
+3. MPC 服务创建 Party ID
+4. 双方协同执行 GG18 协议
+5. 输出:
+   - 公钥 (计算地址)
+   - Shard 1 (返回给 Agent)
+   - Shard 2 (加密存储在服务端)
+\`\`\`
+
+### 签名流程
+
+\`\`\`
+1. Agent 发送签名请求 (message_hash + shard1)
+2. MPC 服务:
+   - 验证 shard1
+   - 加载 shard2
+   - 检查策略
+   - 协同签名
+3. 返回签名 (r, s, v)
+\`\`\`
+
+## 安全设计
+
+### 密钥分片
+
+| 分片 | 位置 | 保护措施 |
+|------|------|---------|
+| Shard 1 | Agent 环境 | 环境变量/K8s Secret |
+| Shard 2 | MPC 服务 | AES-256-GCM + HSM |
+
+### 策略引擎
+
+- 单笔限额
+- 每日限额
+- 地址白名单
+- 时间窗口
+- 每日笔数限制
+
+## 性能指标
+
+| 操作 | 目标时间 |
+|------|---------|
+| 密钥生成 | < 10s (冷启动), < 3s (预计算) |
+| 签名 | < 3s |
+| API 响应 | < 100ms (不含签名) |
+```
+
+---
+
+## OpenAPI 规范
+
+```json
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Agent MPC Wallet API",
+    "version": "1.0.0",
+    "description": "MPC Wallet API for AI Agents"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Development server"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/create": {
+      "post": {
+        "summary": "Create wallet",
+        "security": [{"BearerAuth": []}],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWalletRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateWalletResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API Key"
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string"},
+          "version": {"type": "string"},
+          "timestamp": {"type": "string", "format": "date-time"}
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Postman 集合
+
+```json
+{
+  "info": {
+    "name": "MPC Wallet API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8080/health"
+        }
+      }
+    },
+    {
+      "name": "Create Wallet",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          }
+        ],
+        "url": {
+          "raw": "http://localhost:8080/api/v1/wallet/create"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "apiKey",
+      "value": "test-api-key"
+    }
+  ]
 }
 ```
 
@@ -550,24 +703,48 @@ jobs:
 
 ## 完成标志
 
-### 测试完整性
-- [ ] 所有 E2E 场景已实现
-- [ ] 性能测试已实现
-- [ ] 测试可以正常运行
-- [ ] CI/CD 已配置
+### 文档完整性
+- [ ] 所有 API 端点已文档化
+- [ ] 所有 SDK 方法有说明
+- [ ] 部署指南完整
+- [ ] 有故障排查部分
 
-### 测试质量
-- [ ] 测试覆盖率 > 70%
-- [ ] 测试运行时间 < 5 分钟
-- [ ] 测试有清晰的输出
+### 示例完整性
+- [ ] 快速开始指南
+- [ ] 代码示例可运行
+- [ ] 有输出说明
 
-### 集成验证
-- [ ] 测试网交易成功
-- [ ] 签名验证通过
-- [ ] 策略检查正确
+### 发布准备
+- [ ] README.md 更新
+- [ ] CHANGELOG.md 创建
+- [ ] LICENSE 文件存在
 
 ---
 
-## 下一步
+## 项目完成检查清单
 
-完成后，可以开始 **Task 011: API 文档 + 部署指南**
+### Phase 1-4 全部完成
+- [ ] Task 001: 项目骨架
+- [ ] Task 002: TSS KeyGen
+- [ ] Task 003: TSS Signing
+- [ ] Task 004: HTTP Server
+- [ ] Task 005: Shard 2 存储
+- [ ] Task 006: 策略引擎
+- [ ] Task 007: SDK 客户端
+- [ ] Task 008: MPCWallet 类
+- [ ] Task 009: 示例代码
+- [ ] Task 010: E2E 测试
+- [ ] Task 011: 文档
+
+### v0.1.0 发布准备
+- [ ] 所有测试通过
+- [ ] 文档完整
+- [ ] Docker 镜像可构建
+- [ ] 测试网验证成功
+- [ ] 安全审查完成
+
+---
+
+## 项目完成！
+
+当所有任务完成后，即可发布 v0.1.0 版本。

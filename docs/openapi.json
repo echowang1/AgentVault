@@ -1,0 +1,251 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AgentVault API",
+    "version": "0.1.0",
+    "description": "HTTP API for AgentVault MPC wallet service"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API Key"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean", "example": false },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "details": { "type": "object", "additionalProperties": true }
+            },
+            "required": ["code", "message"]
+          }
+        },
+        "required": ["success", "error"]
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "version": { "type": "string", "example": "0.1.0" },
+                    "timestamp": { "type": "string", "format": "date-time" }
+                  },
+                  "required": ["status", "version", "timestamp"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/create": {
+      "post": {
+        "summary": "Create wallet",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "chain_id": { "type": "integer", "format": "int64" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "address": { "type": "string" },
+                        "public_key": { "type": "string" },
+                        "shard1": { "type": "string" },
+                        "shard2_id": { "type": "string" }
+                      },
+                      "required": ["address", "public_key", "shard1", "shard2_id"]
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Internal error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/wallet/sign": {
+      "post": {
+        "summary": "Sign message hash",
+        "security": [{ "BearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "address": { "type": "string" },
+                  "message_hash": { "type": "string" },
+                  "shard1": { "type": "string" },
+                  "shard2_id": { "type": "string" },
+                  "to": { "type": "string" },
+                  "value": { "type": "string" }
+                },
+                "required": ["address", "message_hash", "shard1"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "signature": { "type": "string" },
+                        "r": { "type": "string" },
+                        "s": { "type": "string" },
+                        "v": { "type": "integer" }
+                      },
+                      "required": ["signature", "r", "s", "v"]
+                    }
+                  },
+                  "required": ["success", "data"]
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid request", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Unauthorized", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/wallet/{address}": {
+      "get": {
+        "summary": "Get wallet",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wallet info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "address": { "type": "string" },
+                        "public_key": { "type": "string" },
+                        "created_at": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/wallet/{address}/policy": {
+      "put": {
+        "summary": "Set policy",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "single_tx_limit": { "type": "string" },
+                  "daily_limit": { "type": "string" },
+                  "whitelist": { "type": "array", "items": { "type": "string" } },
+                  "daily_tx_limit": { "type": "integer" },
+                  "start_time": { "type": "string" },
+                  "end_time": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Policy updated" }
+        }
+      },
+      "get": {
+        "summary": "Get policy",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Policy" },
+          "404": { "description": "Policy not found" }
+        }
+      }
+    },
+    "/api/v1/wallet/{address}/usage": {
+      "get": {
+        "summary": "Get daily usage",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "name": "address", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Usage info" }
+        }
+      }
+    }
+  }
+}

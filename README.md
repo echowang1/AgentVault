@@ -1,64 +1,88 @@
 # AgentVault
 
-[![Go Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/go-test.yml/badge.svg)]
-[![TS Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/ts-test.yml/badge.svg)]
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]
+[![Go Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/go-test.yml/badge.svg)](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/go-test.yml)
+[![TS Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/ts-test.yml/badge.svg)](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/ts-test.yml)
+[![E2E Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/e2e.yml/badge.svg)](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/e2e.yml)
 
-> MPC Wallet SDK for AI Agents — Give your agents the keys to autonomy
+MPC wallet service and TypeScript SDK for AI agents.
 
-## 特性
+## Highlights
 
-- 🔐 **2-of-2 TSS** — 阈值签名，私钥永不完整暴露
-- 🤖 **Agent-Native** — API-first 设计，无需 UI
-- 🛡️ **Policy Engine** — 限额、白名单、时间窗口等策略控制
-- 🚀 **5 分钟集成** — 简单的 TypeScript SDK
-- 🐳 **Docker Ready** — 一键部署，可自托管
+- 2-of-2 MPC (GG18) key generation and signing.
+- HTTP API with API key auth.
+- Policy engine (limits, whitelist, tx count, time window).
+- SQLite persistence with AES-256-GCM encrypted shard storage.
+- TypeScript SDK (`MPCClient`, `MPCWallet`) and examples.
 
-## 快速开始
+## Quick Start
 
-### 安装 SDK
+### 1) Run server (Docker)
 
-\`\`\`bash
-npm install @agent-vault/sdk
-\`\`\`
+```bash
+docker build -t agent-vault:latest -f docker/Dockerfile .
+docker run -d \
+  --name agent-vault \
+  -p 8080:8080 \
+  -e MPC_API_KEYS=test-api-key \
+  -e SHARD_ENCRYPTION_KEY=$(openssl rand -base64 32) \
+  -v $(pwd)/data:/app/data \
+  agent-vault:latest
+```
 
-### 使用示例
+### 2) Build SDK
 
-\`\`\`typescript
-import { AgentVault } from '@agent-vault/sdk';
+```bash
+cd sdk
+npm install
+npm run build
+```
 
-const vault = new AgentVault({
-  baseURL: 'http://localhost:8080',
-  apiKey: process.env.AGENT_VAULT_API_KEY,
+### 3) Use SDK
+
+```ts
+import { MPCWallet, MemoryWalletStorage } from './dist/index.js';
+
+const wallet = new MPCWallet({
+  client: {
+    baseURL: 'http://localhost:8080',
+    apiKey: 'test-api-key',
+    timeout: 120000,
+  },
+  storage: new MemoryWalletStorage(),
 });
 
-// 创建新钱包
-const address = await vault.create();
-console.log('Wallet address:', address);
+const address = await wallet.create(1);
+const signature = await wallet.signMessage('Hello AgentVault');
 
-// 签名交易
-const signature = await vault.signTransaction({
-  to: '0x...',
-  value: '1000000'
-});
-\`\`\`
+console.log(address, signature);
+```
 
-### 服务端部署
+## API Endpoints
 
-\`\`\`bash
-docker run -d \\
-  -p 8080:8080 \\
-  -e VAULT_API_KEYS=your-key \\
-  -e SHARD_ENCRYPTION_KEY=$(openssl rand -base64 32) \\
-  ghcr.io/echowang1/agent-vault:latest
-\`\`\`
+- `GET /health`
+- `POST /api/v1/wallet/create`
+- `POST /api/v1/wallet/sign`
+- `GET /api/v1/wallet/:address`
+- `PUT /api/v1/wallet/:address/policy`
+- `GET /api/v1/wallet/:address/policy`
+- `GET /api/v1/wallet/:address/usage`
 
-## 文档
+## Documentation
 
-- [API 文档](docs/api.md)
-- [集成指南](docs/integration.md)
-- [架构设计](docs/architecture.md)
+- `docs/api.md`
+- `docs/sdk.md`
+- `docs/deployment.md`
+- `docs/architecture.md`
+- `docs/security.md`
+- `docs/troubleshooting.md`
+- `docs/openapi.json`
 
-## 许可证
+## Examples
 
-MIT License © 2026 [Your Name]
+- `examples/basic/README.md`
+- `examples/with-eliza/README.md`
+- `examples/with-goat/README.md`
+
+## License
+
+MIT. See `LICENSE`.
