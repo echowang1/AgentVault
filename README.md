@@ -76,6 +76,7 @@ console.log(address, signature);
 - `docs/security.md`
 - `docs/troubleshooting.md`
 - `docs/openapi.json`
+- `docs/roadmap.md` - Development roadmap and planned improvements
 
 ## Examples
 
