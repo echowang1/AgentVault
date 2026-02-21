@@ -1,5 +1,5 @@
 {
-  "name": "@agent-mpc-wallet/sdk",
+  "name": "@agent-vault/sdk",
   "version": "0.1.0",
   "description": "MPC Wallet SDK for AI Agents",
   "main": "dist/index.js",
@@ -10,7 +10,16 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\""
   },
-  "keywords": ["mpc", "wallet", "web3", "agent", "threshold-signature"],
+  "keywords": [
+    "mpc",
+    "wallet",
+    "web3",
+    "agent",
+    "threshold-signature",
+    "tss",
+    "vault",
+    "agent-vault"
+  ],
   "author": "echowang1",
   "license": "MIT",
   "devDependencies": {

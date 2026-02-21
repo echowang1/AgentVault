@@ -1,4 +1,4 @@
-module github.com/echowang1/agent-mpc-wallet
+module github.com/echowang1/agent-vault
 
 go 1.21
 

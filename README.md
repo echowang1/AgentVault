@@ -1,36 +1,57 @@
-# Agent MPC Wallet
+# AgentVault
 
 [![Go Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/go-test.yml/badge.svg)]
 [![TS Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/ts-test.yml/badge.svg)]
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)]
 
-> 开源的 AI Agent MPC 钱包 SDK
+> MPC Wallet SDK for AI Agents — Give your agents the keys to autonomy
 
 ## 特性
 
-- 🔐 2-of-2 TSS 阈值签名
-- 🚀 5 分钟快速集成
-- 📡 HTTP/REST API
-- 🔌 TypeScript SDK
-- 🐳 Docker 一键部署
+- 🔐 **2-of-2 TSS** — 阈值签名，私钥永不完整暴露
+- 🤖 **Agent-Native** — API-first 设计，无需 UI
+- 🛡️ **Policy Engine** — 限额、白名单、时间窗口等策略控制
+- 🚀 **5 分钟集成** — 简单的 TypeScript SDK
+- 🐳 **Docker Ready** — 一键部署，可自托管
 
 ## 快速开始
 
-### 服务端
+### 安装 SDK
 
-```bash
-make build
-make test
-make docker-build
-```
+\`\`\`bash
+npm install @agent-vault/sdk
+\`\`\`
 
-### SDK
+### 使用示例
 
-```bash
-cd sdk
-npm install
-npm test
-```
+\`\`\`typescript
+import { AgentVault } from '@agent-vault/sdk';
+
+const vault = new AgentVault({
+  baseURL: 'http://localhost:8080',
+  apiKey: process.env.AGENT_VAULT_API_KEY,
+});
+
+// 创建新钱包
+const address = await vault.create();
+console.log('Wallet address:', address);
+
+// 签名交易
+const signature = await vault.signTransaction({
+  to: '0x...',
+  value: '1000000'
+});
+\`\`\`
+
+### 服务端部署
+
+\`\`\`bash
+docker run -d \\
+  -p 8080:8080 \\
+  -e VAULT_API_KEYS=your-key \\
+  -e SHARD_ENCRYPTION_KEY=$(openssl rand -base64 32) \\
+  ghcr.io/echowang1/agent-vault:latest
+\`\`\`
 
 ## 文档
 
@@ -40,4 +61,4 @@ npm test
 
 ## 许可证
 
-MIT License
+MIT License © 2026 [Your Name]
