@@ -15,8 +15,8 @@
     "example:sign-tx": "tsx ../examples/basic/03-sign-transaction.ts",
     "example:set-policy": "tsx ../examples/basic/04-set-policy.ts",
     "examples": "npm-run-all example:*",
-    "test:e2e": "vitest run tests/e2e.test.ts",
-    "test:perf": "vitest run tests/performance.test.ts"
+    "test:e2e": "vitest run --config vitest.e2e.config.ts tests/e2e.test.ts",
+    "test:perf": "vitest run --config vitest.e2e.config.ts tests/performance.test.ts"
   },
   "keywords": [
     "mpc",
