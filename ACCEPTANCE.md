@@ -1,522 +1,547 @@
-# Task 009: 示例代码
+# Task 010: 端到端测试
 
 **负责人**: Codex
 **审核人**: Claude
-**预计时间**: 2-3 小时
-**依赖**: Task 008
+**预计时间**: 3-4 小时
+**依赖**: Task 008, 009
 
 ---
 
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] 创建钱包示例
-- [ ] 签名交易示例
-- [ ] 签名消息示例
-- [ ] 策略设置示例
-- [ ] README 快速开始指南
-- [ ] 所有示例可运行
+- [ ] 完整的 E2E 测试流程
+- [ ] 测试网验证（Sepolia/Base Sepolia）
+- [ ] 测试真实交易发送和确认
+- [ ] 测试报告生成
+- [ ] CI/CD 集成
 
 ### 建议实现 (Should Have)
-- [ ] ElizaOS 插件示例
-- [ ] GOAT SDK 集成示例
-- [ ] 错误处理示例
-- [ ] TypeScript/JavaScript 示例
+- [ ] 性能测试
+- [ ] 压力测试
+- [ ] 多链测试
 
 ---
 
-## 示例结构
+## 测试场景
+
+### 场景 1: 创建钱包 → 签名消息 → 验证
 
 ```
-examples/
-├── basic/
-│   ├── 01-create-wallet.ts     # 创建钱包
-│   ├── 02-sign-message.ts      # 签名消息
-│   ├── 03-sign-transaction.ts  # 签名交易
-│   ├── 04-set-policy.ts        # 设置策略
-│   └── README.md
-│
-├── with-eliza/
-│   ├── mpc-wallet-plugin.ts    # ElizaOS 插件
-│   └── README.md
-│
-├── with-goat/
-│   ├── mpc-wallet-adapter.ts   # GOAT SDK 适配器
-│   └── README.md
-│
-└── README.md                   # 示例总览
+1. 启动 MPC 服务
+2. 使用 SDK 创建钱包
+3. 签名测试消息
+4. 使用 ethers.js 验证签名
+5. 检查恢复地址匹配
+```
+
+### 场景 2: 创建钱包 → 签名交易 → 发送到测试网
+
+```
+1. 启动 MPC 服务
+2. 使用 SDK 创建钱包
+3. 向钱包转入测试 ETH（水龙头）
+4. 签名测试交易
+5. 发送到测试网
+6. 等待交易确认
+7. 验证交易状态
+```
+
+### 场景 3: 策略引擎测试
+
+```
+1. 创建钱包
+2. 设置策略（单笔限额 0.01 ETH）
+3. 尝试签名 0.001 ETH 交易 → 成功
+4. 尝试签名 0.1 ETH 交易 → 失败
+5. 设置白名单
+6. 尝试签名给白名单地址 → 成功
+7. 尝试签名给非白名单地址 → 失败
+```
+
+### 场景 4: 多钱包并发测试
+
+```
+1. 创建 5 个钱包
+2. 并发签名请求
+3. 验证所有签名正确
+4. 验证没有密钥泄露
 ```
 
 ---
 
-## 基础示例
-
-### 01-create-wallet.ts
+## 测试代码
 
 ```typescript
-// examples/basic/01-create-wallet.ts
+// tests/e2e.test.ts
 
-import { MPCWallet, MemoryWalletStorage } from '@agent-mpc-wallet/sdk';
-
-async function main() {
-  // 1. 创建钱包实例
-  const wallet = new MPCWallet({
-    client: {
-      baseURL: process.env.MPC_SERVER_URL ?? 'http://localhost:8080',
-      apiKey: process.env.MPC_API_KEY ?? 'test-api-key',
-    },
-    storage: new MemoryWalletStorage(), // 生产环境使用持久化存储
-  });
-
-  try {
-    // 2. 创建新钱包
-    console.log('Creating new wallet...');
-    const address = await wallet.create(1); // Chain ID 1 = Ethereum
-
-    console.log(`✅ Wallet created successfully!`);
-    console.log(`   Address: ${address}`);
-    console.log(`   Shard 1 (save this!): ${(wallet as any).shard1}`);
-
-    // 3. 后续使用时，从存储加载
-    // await wallet.load(address);
-
-  } catch (error) {
-    console.error('❌ Failed to create wallet:', error);
-    process.exit(1);
-  }
-}
-
-main();
-```
-
-### 02-sign-message.ts
-
-```typescript
-// examples/basic/02-sign-message.ts
-
+import { describe, it, expect, beforeAll } from 'vitest';
 import { MPCWallet } from '@agent-mpc-wallet/sdk';
+import { ethers, verifyMessage, recoverAddress } from 'ethers';
+import { spawn } from 'child_process';
+import { promisify } from 'util';
 
-async function main() {
-  const wallet = new MPCWallet({
-    client: {
-      baseURL: process.env.MPC_SERVER_URL ?? 'http://localhost:8080',
-      apiKey: process.env.MPC_API_KEY ?? 'test-api-key',
-    },
-  });
+const execAsync = promisify(require('child_process').exec);
 
-  // 连接已有钱包
-  const address = '0x...' as const;
-  const shard1 = 'base64...';
+describe('MPC Wallet E2E Tests', () => {
+  let serverProcess: any;
+  let serverUrl: string;
+  let apiKey: string = 'test-api-key-e2e';
 
-  await wallet.connect(address, shard1);
+  beforeAll(async () => {
+    // 1. 启动测试服务器
+    serverUrl = 'http://localhost:8080';
+    serverProcess = spawn('go', ['run', '../server/cmd/server/main.go'], {
+      env: {
+        ...process.env,
+        MPC_API_KEYS: apiKey,
+        DB_PATH: ':memory:',
+      },
+      stdio: 'pipe',
+    });
 
-  try {
-    // 签名消息
-    const message = 'Hello, Agent MPC Wallet!';
-    console.log(`Signing message: "${message}"`);
+    // 等待服务器启动
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    const signature = await wallet.signMessage(message);
+    // 健康检查
+    const response = await fetch(`${serverUrl}/health`);
+    expect(response.ok).toBe(true);
+  }, 30000);
 
-    console.log(`✅ Message signed successfully!`);
-    console.log(`   Signature: ${signature}`);
-
-    // 验证签名（使用 ethers.js）
-    // const recovered = verifyMessage(message, signature);
-    // console.log(`   Recovered address: ${recovered}`);
-
-  } catch (error) {
-    console.error('❌ Failed to sign message:', error);
-  }
-}
-
-main();
-```
-
-### 03-sign-transaction.ts
-
-```typescript
-// examples/basic/03-sign-transaction.ts
-
-import { MPCWallet } from '@agent-mpc-wallet/sdk';
-import { parseEther } from 'ethers';
-
-async function main() {
-  const wallet = new MPCWallet({
-    client: {
-      baseURL: process.env.MPC_SERVER_URL ?? 'http://localhost:8080',
-      apiKey: process.env.MPC_API_KEY ?? 'test-api-key',
-    },
-  });
-
-  // 连接钱包
-  const address = '0x...' as const;
-  const shard1 = 'base64...';
-  await wallet.connect(address, shard1);
-
-  try {
-    // 构建交易
-    const tx = {
-      to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const, // 示例地址
-      value: parseEther('0.01'), // 0.001 ETH
-      gasLimit: 21000,
-      chainId: 1,
-    };
-
-    console.log('Signing transaction:');
-    console.log(`   To: ${tx.to}`);
-    console.log(`   Value: ${tx.value} wei`);
-
-    // 签名
-    const signature = await wallet.signTransaction(tx);
-
-    console.log(`✅ Transaction signed successfully!`);
-    console.log(`   Signature: ${signature}`);
-
-    // 广播交易（使用 ethers.js provider）
-    // const txHash = await provider.sendTransaction(signature);
-    // console.log(`   Tx Hash: ${txHash}`);
-
-  } catch (error) {
-    console.error('❌ Failed to sign transaction:', error);
-
-    // 检查是否是策略错误
-    if (error instanceof PolicyError) {
-      console.error('   Transaction rejected by policy');
+  afterAll(async () => {
+    if (serverProcess) {
+      serverProcess.kill();
     }
-  }
-}
-
-main();
-```
-
-### 04-set-policy.ts
-
-```typescript
-// examples/basic/04-set-policy.ts
-
-import { MPCWallet } from '@agent-mpc-wallet/sdk';
-import { parseEther } from 'ethers';
-
-async function main() {
-  const wallet = new MPCWallet({
-    client: {
-      baseURL: process.env.MPC_SERVER_URL ?? 'http://localhost:8080',
-      apiKey: process.env.MPC_API_KEY ?? 'test-api-key',
-    },
   });
 
-  const address = '0x...' as const;
-  const shard1 = 'base64...';
-  await wallet.connect(address, shard1);
+  describe('Scenario 1: Create Wallet and Sign Message', () => {
+    it('should create wallet and sign message successfully', async () => {
+      // 创建钱包
+      const wallet = new MPCWallet({
+        client: {
+          baseURL: serverUrl,
+          apiKey: apiKey,
+        },
+      });
 
-  try {
-    // 设置策略
-    console.log('Setting wallet policy...');
+      const address = await wallet.create();
+      expect(address).toMatch(/^0x[a-fA-F0-9]{40}$/);
 
-    await wallet.setPolicy({
-      singleTxLimit: parseEther('1').toString(), // 单笔最多 1 ETH
-      dailyLimit: parseEther('10').toString(),   // 每日最多 10 ETH
-      whitelist: [
-        '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb', // Uniswap Router
-        '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Uniswap V3 Router
+      // 签名消息
+      const message = 'Hello, MPC Wallet!';
+      const signature = await wallet.signMessage(message);
+
+      expect(signature).toMatch(/^0x[a-fA-F0-9]{130}$/);
+
+      // 验证签名
+      const recovered = verifyMessage(message, signature);
+      expect(recovered.toLowerCase()).toBe(address.toLowerCase());
+    });
+
+    it('should sign hash correctly', async () => {
+      const wallet = new MPCWallet({
+        client: {
+          baseURL: serverUrl,
+          apiKey: apiKey,
+        },
+      });
+
+      const address = await wallet.create();
+
+      const message = 'Test message for hash signing';
+      const hash = ethers.keccak256(ethers.toUtf8Bytes(message));
+
+      const signature = await wallet.signHash(hash as any);
+
+      // 恢复签名者
+      const recovered = recoverAddress(hash, signature);
+      expect(recovered.toLowerCase()).toBe(address.toLowerCase());
+    });
+  });
+
+  describe('Scenario 2: Sign and Send Transaction', () => {
+    it('should sign transaction and send to testnet', async () => {
+      const wallet = new MPCWallet({
+        client: {
+          baseURL: serverUrl,
+          apiKey: apiKey,
+        },
+      });
+
+      const address = await wallet.create();
+
+      // 获取测试 ETH（如果余额不足）
+      const provider = ethers.getDefaultProvider('sepolia');
+      const balance = await provider.getBalance(address);
+
+      if (balance < ethers.parseEther('0.01')) {
+        console.log('⚠️  Insufficient test ETH. Please fund:', address);
+        // 跳过交易发送测试
+        return;
+      }
+
+      // 构建交易
+      const tx = {
+        to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const,
+        value: ethers.parseEther('0.001'),
+        gasLimit: 21000,
+        chainId: 11155111, // Sepolia
+      };
+
+      // 签名交易
+      const signature = await wallet.signTransaction(tx);
+
+      // 发送交易
+      const txResponse = await provider.broadcastTransaction(signature);
+      console.log('Transaction hash:', txResponse.hash);
+
+      // 等待确认
+      const receipt = await txResponse.wait();
+      expect(receipt).toBeDefined();
+      expect(receipt?.status).toBe(1);
+    }, 60000);
+  });
+
+  describe('Scenario 3: Policy Engine', () => {
+    it('should enforce single transaction limit', async () => {
+      const wallet = new MPCWallet({
+        client: {
+          baseURL: serverUrl,
+          apiKey: apiKey,
+        },
+      });
+
+      const address = await wallet.create();
+
+      // 设置策略：单笔限额 0.01 ETH
+      await wallet.setPolicy({
+        singleTxLimit: ethers.parseEther('0.01').toString(),
+      });
+
+      // 小额交易应该成功
+      const smallTx = {
+        to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const,
+        value: ethers.parseEther('0.001'),
+      };
+
+      await expect(wallet.signTransaction(smallTx)).resolves.toBeDefined();
+
+      // 大额交易应该失败
+      const largeTx = {
+        to: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const,
+        value: ethers.parseEther('0.1'),
+      };
+
+      await expect(wallet.signTransaction(largeTx)).rejects.toThrow();
+    });
+
+    it('should enforce whitelist', async () => {
+      const wallet = new MPCWallet({
+        client: {
+          baseURL: serverUrl,
+          apiKey: apiKey,
+        },
+      });
+
+      const address = await wallet.create();
+
+      const uniswap = '0xE592427A0AEce92De3Edee1F18E0157C05861564' as const;
+      const random = '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb' as const;
+
+      // 设置白名单
+      await wallet.setPolicy({
+        whitelist: [uniswap],
+      });
+
+      // 白名单地址应该成功
+      const whitelistTx = {
+        to: uniswap,
+        value: ethers.parseEther('0.001'),
+      };
+
+      await expect(wallet.signTransaction(whitelistTx)).resolves.toBeDefined();
+
+      // 非白名单地址应该失败
+      const nonWhitelistTx = {
+        to: random,
+        value: ethers.parseEther('0.001'),
+      };
+
+      await expect(wallet.signTransaction(nonWhitelistTx)).rejects.toThrow();
+    });
+  });
+
+  describe('Scenario 4: Concurrent Operations', () => {
+    it('should handle multiple concurrent wallets', async () => {
+      const walletCount = 5;
+      const wallets = await Promise.all(
+        Array.from({ length: walletCount }, () =>
+          new MPCWallet({
+            client: { baseURL: serverUrl, apiKey },
+          }).create(),
+        ),
+      );
+
+      expect(wallets).toHaveLength(walletCount);
+      expect(new Set(wallets).size).toBe(walletCount); // 所有地址不同
+    });
+
+    it('should handle concurrent signing requests', async () => {
+      const wallet = new MPCWallet({
+        client: {
+          baseURL: serverUrl,
+          apiKey: apiKey,
+        },
+      });
+
+      const address = await wallet.create();
+
+      // 并发签名 10 个消息
+      const signatures = await Promise.all(
+        Array.from({ length: 10 }, (_, i) =>
+          wallet.signMessage(`Message ${i}`),
+        ),
+      );
+
+      expect(signatures).toHaveLength(10);
+
+      // 验证所有签名
+      signatures.forEach((sig, i) => {
+        expect(sig).toMatch(/^0x[a-fA-F0-9]{130}$/);
+        const recovered = verifyMessage(`Message ${i}`, sig);
+        expect(recovered.toLowerCase()).toBe(address.toLowerCase());
+      });
+    });
+  });
+
+  describe('Scenario 5: Storage Persistence', () => {
+    it('should persist and load wallet data', async () => {
+      const storage = new MemoryWalletStorage();
+      const wallet = new MPCWallet({
+        client: { baseURL: serverUrl, apiKey },
+        storage,
+      });
+
+      // 创建钱包
+      const address = await wallet.create();
+
+      // 断开
+      wallet.disconnect();
+
+      // 创建新实例并加载
+      const wallet2 = new MPCWallet({
+        client: { baseURL: serverUrl, apiKey },
+        storage,
+      });
+
+      const loaded = await wallet2.load(address);
+      expect(loaded).toBe(true);
+      expect(wallet2.getAddress()).toBe(address);
+
+      // 验证可以签名
+      const signature = await wallet2.signMessage('test');
+      expect(signature).toBeDefined();
+    });
+  });
+});
+```
+
+---
+
+## 性能测试
+
+```typescript
+// tests/performance.test.ts
+
+import { describe, it, expect } from 'vitest';
+import { MPCWallet } from '@agent-mpc-wallet/sdk';
+
+describe('Performance Tests', () => {
+  it('should create wallet in under 10 seconds', async () => {
+    const start = Date.now();
+
+    const wallet = new MPCWallet({
+      client: { baseURL: 'http://localhost:8080', apiKey: 'test' },
+    });
+
+    await wallet.create();
+
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(10000);
+    console.log(`Wallet creation took ${elapsed}ms`);
+  });
+
+  it('should sign message in under 3 seconds', async () => {
+    const wallet = new MPCWallet({
+      client: { baseURL: 'http://localhost:8080', apiKey: 'test' },
+    });
+
+    await wallet.create();
+
+    const start = Date.now();
+    await wallet.signMessage('performance test');
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(3000);
+    console.log(`Signing took ${elapsed}ms`);
+  });
+
+  it('should handle 100 transactions in under 60 seconds', async () => {
+    const wallet = new MPCWallet({
+      client: { baseURL: 'http://localhost:8080', apiKey: 'test' },
+    });
+
+    await wallet.create();
+
+    const start = Date.now();
+
+    const signatures = await Promise.all(
+      Array.from({ length: 100 }, (_, i) =>
+        wallet.signMessage(`Message ${i}`),
+      ),
+    );
+
+    const elapsed = Date.now() - start;
+    expect(signatures).toHaveLength(100);
+    expect(elapsed).toBeLessThan(60000);
+
+    console.log(`100 signatures took ${elapsed}ms`);
+    console.log(`Average: ${elapsed / 100}ms per signature`);
+  });
+});
+```
+
+---
+
+## 测试配置
+
+```typescript
+// vitest.config.ts
+
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    globals: true,
+    environment: 'node',
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      exclude: [
+        'node_modules/',
+        'tests/',
+        '**/*.test.ts',
+        '**/*.spec.ts',
+        'examples/',
       ],
-      dailyTxLimit: 100, // 每日最多 100 笔交易
-    });
-
-    console.log('✅ Policy set successfully!');
-
-    // 查询策略
-    const policy = await wallet.getPolicy();
-    console.log('Current policy:');
-    console.log(`   Single tx limit: ${policy?.singleTxLimit} wei`);
-    console.log(`   Daily limit: ${policy?.dailyLimit} wei`);
-    console.log(`   Whitelist: ${policy?.whitelist?.join(', ')}`);
-
-    // 查询每日使用
-    const usage = await wallet.getDailyUsage();
-    console.log('Today\'s usage:');
-    console.log(`   Total amount: ${usage?.totalAmount} wei`);
-    console.log(`   Tx count: ${usage?.txCount}`);
-
-  } catch (error) {
-    console.error('❌ Failed to set policy:', error);
-  }
-}
-
-main();
-```
-
----
-
-## ElizaOS 插件示例
-
-```typescript
-// examples/with-eliza/mpc-wallet-plugin.ts
-
-import { Plugin, IAgentRuntime } from '@elizaos/core';
-import { MPCWallet } from '@agent-mpc-wallet/sdk';
-
-/**
- * MPC Wallet Plugin for ElizaOS
- *
- * 使用方式:
- * 1. 在 ElizaOS 配置中添加插件
- * 2. 设置环境变量 MPC_SERVER_URL 和 MPC_API_KEY
- * 3. Agent 可以使用钱包进行签名
- */
-export class MPCWalletPlugin implements Plugin {
-  name = 'mpc-wallet';
-  description = 'MPC wallet for secure signing';
-
-  private wallet?: MPCWallet;
-
-  async init(runtime: IAgentRuntime): Promise<void> {
-    // 从配置读取 MPC 服务地址
-    const serverUrl = runtime.getSetting('MPC_SERVER_URL');
-    const apiKey = runtime.getSetting('MPC_API_KEY');
-
-    if (!serverUrl || !apiKey) {
-      throw new Error('MPC_SERVER_URL and MPC_API_KEY must be set');
-    }
-
-    // 创建钱包实例
-    this.wallet = new MPCWallet({
-      client: {
-        baseURL: serverUrl,
-        apiKey: apiKey,
-      },
-    });
-
-    // 连接或创建钱包
-    const address = runtime.getSetting('WALLET_ADDRESS');
-    const shard1 = runtime.getSetting('WALLET_SHARD1');
-
-    if (address && shard1) {
-      await this.wallet.connect(address as any, shard1);
-      console.log(`[MPC Wallet] Connected to ${address}`);
-    } else {
-      const newAddress = await this.wallet.create();
-      console.log(`[MPC Wallet] Created new wallet: ${newAddress}`);
-      console.log(`[MPC Wallet] IMPORTANT: Save your shard1! ${(this.wallet as any).shard1}`);
-    }
-
-    // 注册 Actions
-    runtime.registerAction({
-      name: 'SIGN_TRANSACTION',
-      description: 'Sign a transaction using MPC wallet',
-      handler: async (args: any) => {
-        if (!this.wallet) {
-          throw new Error('Wallet not initialized');
-        }
-
-        const signature = await this.wallet.signTransaction({
-          to: args.to,
-          value: args.value,
-          data: args.data,
-          gasLimit: args.gasLimit,
-        });
-
-        return {
-          success: true,
-          signature,
-        };
-      },
-    });
-
-    runtime.registerAction({
-      name: 'SIGN_MESSAGE',
-      description: 'Sign a message using MPC wallet',
-      handler: async (args: any) => {
-        if (!this.wallet) {
-          throw new Error('Wallet not initialized');
-        }
-
-        const signature = await this.wallet.signMessage(args.message);
-
-        return {
-          success: true,
-          signature,
-        };
-      },
-    });
-
-    runtime.registerAction({
-      name: 'GET_WALLET_ADDRESS',
-      description: 'Get the wallet address',
-      handler: async () => {
-        if (!this.wallet) {
-          throw new Error('Wallet not initialized');
-        }
-
-        return {
-          success: true,
-          address: this.wallet.getAddress(),
-        };
-      },
-    });
-  }
-
-  async cleanup(): Promise<void> {
-    this.wallet?.disconnect();
-  }
-}
-
-export default MPCWalletPlugin;
-```
-
----
-
-## GOAT SDK 适配器示例
-
-```typescript
-// examples/with-goat/mpc-wallet-adapter.ts
-
-import { EVMWalletClient } from '@goat-sdk/wallet';
-import { MPCWallet } from '@agent-mpc-wallet/sdk';
-
-/**
- * MPC Wallet Adapter for GOAT SDK
- *
- * 实现 GOAT 的 EVMWalletClient 接口
- * 使得 GOAT 框架可以使用 MPC 钱包
- */
-export class GOATMPCWalletAdapter implements EVMWalletClient {
-  private wallet: MPCWallet;
-
-  constructor(wallet: MPCWallet) {
-    this.wallet = wallet;
-  }
-
-  /**
-   * 获取钱包地址
-   */
-  getAddress(): string {
-    return this.wallet.getAddress() ?? '';
-  }
-
-  /**
-   * 签名交易
-   */
-  async signTransaction(tx: any): Promise<string> {
-    return this.wallet.signTransaction({
-      to: tx.to,
-      value: tx.value,
-      data: tx.data,
-      gasLimit: tx.gas,
-      gasPrice: tx.gasPrice,
-      nonce: tx.nonce,
-      chainId: tx.chainId,
-    });
-  }
-
-  /**
-   * 签名消息
-   */
-  async signMessage(message: string): Promise<string> {
-    return this.wallet.signMessage(message);
-  }
-
-  /**
-   * 签名 typed data (EIP-712)
-   */
-  async signTypedData(domain: any, types: any, value: any): Promise<string> {
-    // 实现 EIP-712 签名
-    // 需要先计算 hash，然后调用 signHash
-    const hash = ''; // TODO: 计算 EIP-712 hash
-    return this.wallet.signHash(hash as any);
-  }
-}
-
-// 使用示例
-export function createGOATMPCWallet(config: any): EVMWalletClient {
-  const wallet = new MPCWallet({
-    client: {
-      baseURL: config.serverURL,
-      apiKey: config.apiKey,
     },
-  });
+    setupFiles: ['./tests/setup.ts'],
+  },
+});
+```
 
-  return new GOATMPCWalletAdapter(wallet);
-}
+```typescript
+// tests/setup.ts
+
+import { beforeAll } from 'vitest';
+
+beforeAll(() => {
+  // 全局测试设置
+  console.log('Starting E2E tests...');
+  console.log('Make sure the MPC server is running!');
+});
 ```
 
 ---
 
-## README 文档
+## CI/CD 集成
 
-### examples/README.md
+```yaml
+# .github/workflows/e2e.yml
 
-```markdown
-# Agent MPC Wallet - 示例代码
+name: E2E Tests
 
-本目录包含 MPC Wallet SDK 的使用示例。
+on:
+  push:
+    branches: [main, task/**]
+  pull_request:
+    branches: [main]
 
-## 环境设置
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
 
-```bash
-# 安装依赖
-npm install
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
-# 设置环境变量
-export MPC_SERVER_URL=http://localhost:8080
-export MPC_API_KEY=your-api-key
-```
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-## 基础示例
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: true
 
-### 1. 创建钱包
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: sdk/package-lock.json
 
-```bash
-npm run example:create
-```
+      - name: Install dependencies
+        run: |
+          cd server && go mod download
+          cd sdk && npm ci
 
-### 2. 签名消息
+      - name: Build server
+        run: |
+          cd server && go build -o ../bin/server ./cmd/server
 
-```bash
-npm run example:sign-message
-```
+      - name: Start server
+        run: |
+          mkdir -p data
+          export MPC_API_KEYS=test-key
+          export DB_PATH=./data/test.db
+          ./bin/server &
+          sleep 5
 
-### 3. 签名交易
+      - name: Run E2E tests
+        run: |
+          cd sdk && npm run test:e2e
 
-```bash
-npm run example:sign-tx
-```
-
-### 4. 设置策略
-
-```bash
-npm run example:set-policy
-```
-
-## 框架集成
-
-### ElizaOS 插件
-
-参见 [with-eliza/README.md](./with-eliza/README.md)
-
-### GOAT SDK 适配器
-
-参见 [with-goat/README.md](./with-goat/README.md)
-
-## 运行所有示例
-
-```bash
-npm run examples
-```
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./sdk/coverage/e2e coverage-final.json
 ```
 
 ---
 
-## package.json 脚本
+## 测试脚本
 
 ```json
+// package.json
+
 {
   "scripts": {
-    "example:create": "tsx examples/basic/01-create-wallet.ts",
-    "example:sign-message": "tsx examples/basic/02-sign-message.ts",
-    "example:sign-tx": "tsx examples/basic/03-sign-transaction.ts",
-    "example:set-policy": "tsx examples/basic/04-set-policy.ts",
-    "examples": "npm-run-all example:*"
+    "test": "vitest",
+    "test:unit": "vitest run --coverage",
+    "test:e2e": "vitest run tests/e2e.test.ts",
+    "test:perf": "vitest run tests/performance.test.ts",
+    "test:all": "npm-run-all test:*"
   }
 }
 ```
@@ -525,24 +550,24 @@ npm run examples
 
 ## 完成标志
 
-### 文件完整性
-- [ ] 所有基础示例已创建
-- [ ] ElizaOS 插件示例已创建
-- [ ] GOAT SDK 适配器示例已创建
-- [ ] README 文档完整
+### 测试完整性
+- [ ] 所有 E2E 场景已实现
+- [ ] 性能测试已实现
+- [ ] 测试可以正常运行
+- [ ] CI/CD 已配置
 
-### 可运行性
-- [ ] 所有示例可成功编译
-- [ ] 所有示例可正常运行（需要 mock 或真实服务）
-- [ ] 有清晰的输出说明
+### 测试质量
+- [ ] 测试覆盖率 > 70%
+- [ ] 测试运行时间 < 5 分钟
+- [ ] 测试有清晰的输出
 
-### 文档质量
-- [ ] 代码有充分注释
-- [ ] README 有使用说明
-- [ ] 有环境变量说明
+### 集成验证
+- [ ] 测试网交易成功
+- [ ] 签名验证通过
+- [ ] 策略检查正确
 
 ---
 
 ## 下一步
 
-完成后，可以开始 **Task 010: 端到端测试**
+完成后，可以开始 **Task 011: API 文档 + 部署指南**

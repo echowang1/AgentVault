@@ -14,7 +14,9 @@
     "example:sign-message": "tsx ../examples/basic/02-sign-message.ts",
     "example:sign-tx": "tsx ../examples/basic/03-sign-transaction.ts",
     "example:set-policy": "tsx ../examples/basic/04-set-policy.ts",
-    "examples": "npm-run-all example:*"
+    "examples": "npm-run-all example:*",
+    "test:e2e": "vitest run tests/e2e.test.ts",
+    "test:perf": "vitest run tests/performance.test.ts"
   },
   "keywords": [
     "mpc",
