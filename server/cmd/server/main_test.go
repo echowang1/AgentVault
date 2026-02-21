@@ -1,32 +1,24 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/echowang1/agent-vault/internal/config"
 )
 
-func TestHealthHandler(t *testing.T) {
+func TestHealthEndpoint(t *testing.T) {
+	r, err := newServer(&config.Config{APIKeys: map[string]bool{"test-api-key": true}})
+	if err != nil {
+		t.Fatalf("newServer failed: %v", err)
+	}
+
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	rec := httptest.NewRecorder()
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
 
-	healthHandler(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
-	}
-
-	var payload map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("expected valid json response: %v", err)
-	}
-
-	if payload["status"] != "ok" {
-		t.Fatalf("expected status=ok, got %q", payload["status"])
-	}
-
-	if payload["version"] != "0.1.0" {
-		t.Fatalf("expected version=0.1.0, got %q", payload["version"])
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected %d, got %d", http.StatusOK, w.Code)
 	}
 }

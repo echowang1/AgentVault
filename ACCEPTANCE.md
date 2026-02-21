@@ -1,144 +1,214 @@
-# Task 003: TSS 签名核心功能
+# Task 004: HTTP Server + 基础路由
 
 **负责人**: Codex
 **审核人**: Claude
-**预计时间**: 4-6 小时
-**依赖**: Task 002
+**预计时间**: 3-4 小时
+**依赖**: Task 002, 003
 
 ---
 
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] 使用 `github.com/bnb-chain/tss-lib` 实现 2-of-2 ECDSA 签名
-- [ ] 接收 Shard 1（从 Agent）和 Shard 2（从存储）
-- [ ] 返回标准 ECDSA 签名 (r, s, v)
-- [ ] 支持消息签名和交易哈希签名
-- [ ] 完整的单元测试
-- [ ] 签名可以被 ethers.js 验证
+- [ ] 使用 `gin-gonic/gin` 框架
+- [ ] 健康检查端点 `GET /health`
+- [ ] 创建钱包 `POST /api/v1/wallet/create`
+- [ ] 签名交易 `POST /api/v1/wallet/sign`
+- [ ] 查询钱包 `GET /api/v1/wallet/:address`
+- [ ] CORS 中间件
+- [ ] API Key 认证中间件
+- [ ] 请求日志中间件
+- [ ] 错误处理统一格式
 
 ### 建议实现 (Should Have)
-- [ ] 批量签名支持（多个消息）
-- [ ] 签名进度回调
-- [ ] 签名缓存（避免重复签名相同消息）
+- [ ] 请求 ID 追踪
+- [ ] 指标端点 `/metrics`
+- [ ] 优雅关闭
+
+---
+
+## API 设计
+
+### 健康检查
+
+```http
+GET /health
+
+响应:
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "timestamp": "2026-02-21T10:00:00Z"
+}
+```
+
+### 创建钱包
+
+```http
+POST /api/v1/wallet/create
+Authorization: Bearer <API_KEY>
+Content-Type: application/json
+
+请求体: (可选)
+{
+  "chain_id": "1"  // 默认 1 (Ethereum)
+}
+
+响应:
+{
+  "success": true,
+  "data": {
+    "address": "0x...",
+    "public_key": "0x...",
+    "shard1": "base64...",
+    "shard2_id": "uuid-..."
+  }
+}
+```
+
+### 签名交易
+
+```http
+POST /api/v1/wallet/sign
+Authorization: Bearer <API_KEY>
+Content-Type: application/json
+
+请求:
+{
+  "address": "0x...",
+  "message_hash": "0x...",  // 32 字节，十六进制
+  "shard1": "base64..."
+}
+
+响应:
+{
+  "success": true,
+  "data": {
+    "signature": "0x...",  // 130 字符 (0x + r64 + s64 + v2)
+    "r": "0x...",
+    "s": "0x...",
+    "v": 28
+  }
+}
+```
+
+### 查询钱包
+
+```http
+GET /api/v1/wallet/:address
+Authorization: Bearer <API_KEY>
+
+响应:
+{
+  "success": true,
+  "data": {
+    "address": "0x...",
+    "public_key": "0x...",
+    "created_at": "2026-02-21T10:00:00Z"
+  }
+}
+```
+
+### 错误响应格式
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "INVALID_REQUEST",
+    "message": "详细错误信息",
+    "details": {}
+  }
+}
+```
 
 ---
 
 ## 接口定义
 
 ```go
-// server/internal/tss/signing.go
-package tss
+// server/internal/api/handler.go
+package api
 
 import (
-    "context"
-    "math/big"
+    "net/http"
+    "github.com/gin-gonic/gin"
 )
 
-// SignRequest 签名请求
-type SignRequest struct {
-    // Address 钱包地址
-    Address string `json:"address"`
-
-    // MessageHash 要签名的消息哈希（32 字节）
-    MessageHash string `json:"message_hash"`
-
-    // Shard1 密钥碎片 1（base64 编码，由 Agent 提供）
-    Shard1 string `json:"shard1"`
-
-    // Shard2ID 密钥碎片 2 的存储 ID
-    Shard2ID string `json:"shard2_id"`
+// WalletHandler 钱包处理器
+type WalletHandler struct {
+    keyGen   tss.KeyGenerator
+    signer   tss.Signer
+    storage  storage.ShardStorage
 }
 
-// Signature ECDSA 签名
-type Signature struct {
-    // R 签名的 r 值（十六进制字符串）
-    R string `json:"r"`
+// NewWalletHandler 创建处理器
+func NewWalletHandler(
+    keyGen tss.KeyGenerator,
+    signer tss.Signer,
+    storage storage.ShardStorage,
+) *WalletHandler
 
-    // S 签名的 s 值（十六进制字符串）
-    S string `json:"s"`
-
-    // V recovery id (0 或 1)
-    V uint8 `json:"v"`
-
-    // 完整签名 (0x 前缀，130 字符)
-    // 格式: r(64) + s(64) + v(2)
-    FullSignature string `json:"signature"`
-}
-
-// SignProgress 签名进度
-type SignProgress struct {
-    Step    string `json:"step"`
-    Percent int    `json:"percent"`
-}
-
-// ProgressCallback 进度回调函数
-type ProgressCallback func(progress SignProgress)
-
-// Signer 签名器接口
-type Signer interface {
-    // Sign 签名消息
-    Sign(ctx context.Context, req *SignRequest) (*Signature, error)
-
-    // SignWithProgress 带进度的签名
-    SignWithProgress(
-        ctx context.Context,
-        req *SignRequest,
-        callback ProgressCallback,
-    ) (*Signature, error)
-
-    // SignBatch 批量签名
-    SignBatch(
-        ctx context.Context,
-        reqs []*SignRequest,
-    ) ([]*Signature, error)
-}
-
-// NewSigner 创建签名器
-func NewSigner(shardStorage ShardStorage) (Signer, error)
+// RegisterRoutes 注册路由
+func (h *WalletHandler) RegisterRoutes(r *gin.Engine)
 ```
 
 ---
 
-## 技术要求
+## 中间件要求
 
-### 签名流程
-
-```
-1. 验证输入
-   ├── MessageHash 必须是 32 字节
-   ├── Address 格式正确
-   └── Shard1 解码成功
-
-2. 加载 Shard 2
-   ├── 从存储加载
-   └── 验证与 Address 匹配
-
-3. 协同签名
-   ├── 使用 tss-lib 的 signing 协议
-   ├── Shard1 + Shard2 协同计算
-   └── 生成 ECDSA 签名
-
-4. 返回结果
-   ├── R, S, V
-   └── 完整签名字符串
-```
-
-### V 值计算
+### API Key 认证
 
 ```go
-// CalculateV 计算 recovery id
-func CalculateV(r, s *big.Int, publicKey *ecdsa.PublicKey, hash []byte) uint8 {
-    // 尝试 v = 0 和 v = 1
-    // 看哪个能恢复出正确的公钥
-    for v := uint8(0); v <= 1; v++ {
-        if recoveredPubKey := ec.RecoverToPublic(hash, r, s, v); recoveredPubKey != nil {
-            if recoveredPubKey.Equal(publicKey) {
-                return v + 27 // 以太坊使用 27/28
-            }
+// server/internal/api/middleware.go
+package api
+
+import "github.com/gin-gonic/gin"
+
+// APIKeyAuth API Key 认证中间件
+func APIKeyAuth(validKeys map[string]bool) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        apiKey := c.GetHeader("Authorization")
+        if apiKey == "" {
+            c.JSON(401, gin.H{"error": "missing API key"})
+            c.Abort()
+            return
         }
+
+        // 提取 Bearer token
+        if len(apiKey) > 7 && apiKey[:7] == "Bearer " {
+            apiKey = apiKey[7:]
+        }
+
+        if !validKeys[apiKey] {
+            c.JSON(401, gin.H{"error": "invalid API key"})
+            c.Abort()
+            return
+        }
+
+        c.Next()
     }
-    return 0
+}
+```
+
+### CORS
+
+```go
+// CORSMiddleware CORS 中间件
+func CORSMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+        c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+        c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+        c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+
+        if c.Request.Method == "OPTIONS" {
+            c.AbortWithStatus(204)
+            return
+        }
+
+        c.Next()
+    }
 }
 ```
 
@@ -149,196 +219,99 @@ func CalculateV(r, s *big.Int, publicKey *ecdsa.PublicKey, hash []byte) uint8 {
 ### 单元测试
 
 ```go
-// server/internal/tss/signing_test.go
-package tss
+// server/internal/api/handler_test.go
+package api
 
 import (
-    "context"
-    "encoding/hex"
-    "math/big"
+    "bytes"
+    "encoding/json"
+    "net/http"
+    "net/http/httptest"
     "testing"
     "github.com/stretchr/testify/assert"
     "github.com/stretchr/testify/require"
 )
 
-func TestNewSigner(t *testing.T) {
-    storage := NewMockShardStorage()
-    signer, err := NewSigner(storage)
-    require.NoError(t, err)
-    assert.NotNil(t, signer)
+func TestHealthCheck(t *testing.T) {
+    router := setupTestRouter()
+
+    req, _ := http.NewRequest("GET", "/health", nil)
+    w := httptest.NewRecorder()
+
+    router.ServeHTTP(w, req)
+
+    assert.Equal(t, 200, w.Code)
+    assert.Contains(t, w.Body.String(), "ok")
 }
 
-func TestSign_ValidSignature(t *testing.T) {
-    // 准备：先创建密钥
-    keygen, err := NewKeyGenerator()
-    require.NoError(t, err)
+func TestCreateWallet_Success(t *testing.T) {
+    router := setupTestRouter()
 
-    keyResult, err := keygen.GenerateKey(context.Background())
-    require.NoError(t, err)
-
-    // 存储 Shard 2
-    storage := NewMockShardStorage()
-    storage.Store(keyResult.Shard2ID, keyResult.Shard2)
-
-    // 创建签名器
-    signer, err := NewSigner(storage)
-    require.NoError(t, err)
-
-    // 准备签名请求
-    messageHash := keccak256Hash([]byte("test message"))
-    req := &SignRequest{
-        Address:     keyResult.Address,
-        MessageHash: hex.EncodeToString(messageHash),
-        Shard1:      keyResult.Shard1,
-        Shard2ID:    keyResult.Shard2ID,
+    body := map[string]interface{}{
+        "chain_id": "1",
     }
+    jsonBody, _ := json.Marshal(body)
 
-    // 执行签名
-    sig, err := signer.Sign(context.Background(), req)
-    require.NoError(t, err)
+    req, _ := http.NewRequest("POST", "/api/v1/wallet/create", bytes.NewReader(jsonBody))
+    req.Header.Set("Authorization", "Bearer test-api-key")
+    req.Header.Set("Content-Type", "application/json")
 
-    // 验证签名格式
-    assert.NotEmpty(t, sig.R)
-    assert.NotEmpty(t, sig.S)
-    assert.Contains(t, []uint8{27, 28}, sig.V)
-    assert.Len(t, sig.FullSignature, 132) // 0x + 130 字符
+    w := httptest.NewRecorder()
+    router.ServeHTTP(w, req)
 
-    // 验证签名有效性（使用 go-ethereum）
-    rBytes, _ := hex.DecodeString(sig.R)
-    sBytes, _ := hex.DecodeString(sig.S)
-    rInt := new(big.Int).SetBytes(rBytes)
-    sInt := new(big.Int).SetBytes(sBytes)
+    assert.Equal(t, 200, w.Code)
 
-    pubKey, err := recoverPubKey(messageHash, rInt, sInt, sig.V-27)
-    require.NoError(t, err)
+    var resp map[string]interface{}
+    json.Unmarshal(w.Body.Bytes(), &resp)
 
-    // 比较地址
-    recoveredAddr := crypto.PubkeyToAddress(*pubKey)
-    assert.Equal(t, keyResult.Address, recoveredAddr.Hex())
+    assert.True(t, resp["success"].(bool))
+    data := resp["data"].(map[string]interface{})
+    assert.Regexp(t, "^0x[a-fA-F0-9]{40}$", data["address"])
+    assert.NotEmpty(t, data["shard1"])
+    assert.NotEmpty(t, data["shard2_id"])
 }
 
-func TestSign_InvalidHash(t *testing.T) {
-    storage := NewMockShardStorage()
-    signer, err := NewSigner(storage)
-    require.NoError(t, err)
+func TestCreateWallet_NoAPIKey(t *testing.T) {
+    router := setupTestRouter()
 
-    req := &SignRequest{
-        MessageHash: "invalid",
-        Shard1:      "base64data",
-    }
+    req, _ := http.NewRequest("POST", "/api/v1/wallet/create", nil)
+    w := httptest.NewRecorder()
 
-    _, err = signer.Sign(context.Background(), req)
-    assert.Error(t, err)
-    assert.Equal(t, ErrInvalidHash, err)
+    router.ServeHTTP(w, req)
+
+    assert.Equal(t, 401, w.Code)
 }
 
-func TestSign_ShardNotFound(t *testing.T) {
-    storage := NewMockShardStorage()
-    signer, err := NewSigner(storage)
-    require.NoError(t, err)
-
-    req := &SignRequest{
-        Address:     "0x1234567890123456789012345678901234567890",
-        MessageHash: hex.EncodeToString(make([]byte, 32)),
-        Shard1:      "base64data",
-        Shard2ID:    "non-existent",
-    }
-
-    _, err = signer.Sign(context.Background(), req)
-    assert.Error(t, err)
-    assert.Equal(t, ErrShardNotFound, err)
-}
-```
-
-### 集成测试
-
-```go
-// server/internal/tss/signing_integration_test.go
-package tss
-
-func TestKeyGenAndSignEndToEnd(t *testing.T) {
-    if testing.Short() {
-        t.Skip("跳过集成测试")
-    }
-
-    ctx := context.Background()
-
-    // 1. 生成密钥
-    keygen, err := NewKeyGenerator()
-    require.NoError(t, err)
-
-    keyResult, err := keygen.GenerateKey(ctx)
-    require.NoError(t, err)
-
-    // 2. 存储 Shard 2
-    storage := NewMemoryShardStorage()
-    err = storage.Store(keyResult.Shard2ID, keyResult.Shard2)
-    require.NoError(t, err)
-
-    // 3. 创建签名器并签名
-    signer, err := NewSigner(storage)
-    require.NoError(t, err)
-
-    message := []byte("Hello, Agent MPC Wallet!")
-    messageHash := crypto.Keccak256Hash(message)
-
-    req := &SignRequest{
-        Address:     keyResult.Address,
-        MessageHash: hex.EncodeToString(messageHash.Bytes()),
-        Shard1:      keyResult.Shard1,
-        Shard2ID:    keyResult.Shard2ID,
-    }
-
-    sig, err := signer.Sign(ctx, req)
-    require.NoError(t, err)
-
-    // 4. 验证签名
-    rBytes, _ := hex.DecodeString(sig.R)
-    sBytes, _ := hex.DecodeString(sig.S)
-    rInt := new(big.Int).SetBytes(rBytes)
-    sInt := new(big.Int).SetBytes(sBytes)
-
-    pubKeyBytes, err := crypto.Ecrecover(messageHash.Bytes(), rInt, sInt, sig.V-27)
-    require.NoError(t, err)
-
-    pubKey, err := crypto.UnmarshalPubkey(pubKeyBytes)
-    require.NoError(t, err)
-
-    recoveredAddr := crypto.PubkeyToAddress(*pubKey)
-    assert.Equal(t, keyResult.Address, recoveredAddr.Hex())
+func TestSign_Success(t *testing.T) {
+    // 1. 先创建钱包
+    // 2. 然后签名
+    // ...
 }
 ```
 
 ---
 
-## 性能要求
-
-- [ ] 单次签名在 3 秒内完成
-- [ ] 批量签名（10 个）在 10 秒内完成
-- [ ] 内存占用不超过 50MB
-
----
-
-## 安全要求
-
-- [ ] 验证 MessageHash 长度（必须是 32 字节）
-- [ ] 验证 Shard 1 与 Address 匹配
-- [ ] 私钥分片永不暴露在日志中
-- [ ] 签名后立即清理内存中的敏感数据
-- [ ] 使用 constant-time 比较避免时序攻击
-
----
-
-## 错误处理
+## 配置要求
 
 ```go
-var (
-    ErrInvalidHash      = errors.New("消息哈希必须是 32 字节")
-    ErrInvalidSignature = errors.New("无效签名")
-    ErrShardNotFound    = errors.New("密钥分片未找到")
-    ErrShardMismatch    = errors.New("密钥分片不匹配")
-    ErrSignFailed       = errors.New("签名失败")
-)
+// server/internal/config/config.go
+package config
+
+type Config struct {
+    Server   ServerConfig   `mapstructure:"server"`
+    APIKeys  map[string]bool `mapstructure:"api_keys"`
+}
+
+type ServerConfig struct {
+    Host            string `mapstructure:"host"`
+    Port            int    `mapstructure:"port"`
+    ReadTimeout     int    `mapstructure:"read_timeout"`
+    WriteTimeout    int    `mapstructure:"write_timeout"`
+    ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
+}
+
+// Load 加载配置
+func Load() (*Config, error)
 ```
 
 ---
@@ -346,11 +319,13 @@ var (
 ## 文件结构
 
 ```
-server/internal/tss/
-├── signing.go              # 主实现
-├── signing_test.go         # 单元测试
-├── signing_integration_test.go  # 集成测试
-└── mock_storage.go         # Mock 存储（用于测试）
+server/internal/api/
+├── handler.go              # 处理器
+├── middleware.go           # 中间件
+├── routes.go               # 路由注册
+├── response.go             # 响应格式
+├── handler_test.go         # 单元测试
+└── errors.go               # 错误定义
 ```
 
 ---
@@ -358,47 +333,42 @@ server/internal/tss/
 ## 完成标志
 
 ### 功能验证
-- [ ] 所有单元测试通过
-- [ ] 集成测试通过
-- [ ] 签名可以被 ethers.js 验证
+- [ ] 所有 API 端点可访问
+- [ ] API Key 认证正常工作
+- [ ] 错误响应格式统一
+- [ ] 所有测试通过
 
 ### 代码质量
 - [ ] `go test ./...` 通过
 - [ ] `golangci-lint run` 通过
-- [ ] 测试覆盖率 > 80%
+- [ ] 测试覆盖率 > 70%
 
-### 验证脚本
-- [ ] 提供验证脚本（使用 cast 或 ethers.js）
+### 集成验证
+- [ ] 可以用 curl 测试所有端点
+- [ ] 提供测试脚本
 
 ---
 
 ## 验证命令
 
 ```bash
-# 运行测试
-cd server && go test -v ./internal/tss/...
+# 健康检查
+curl http://localhost:8080/health
 
-# 使用 ethers.js 验证（在本地测试网）
-node scripts/verify-signature.js <address> <message> <signature>
+# 创建钱包
+curl -X POST http://localhost:8080/api/v1/wallet/create \
+  -H "Authorization: Bearer test-key" \
+  -H "Content-Type: application/json"
 
-# 或使用 cast
-cast verify-signature \
-  <address> \
-  <message-hash> \
-  <signature> \
-  --rpc-url https://eth-sepolia.publicnode.com
+# 签名
+curl -X POST http://localhost:8080/api/v1/wallet/sign \
+  -H "Authorization: Bearer test-key" \
+  -H "Content-Type: application/json" \
+  -d '{"address":"0x...","message_hash":"0x...","shard1":"..."}'
 ```
 
 ---
 
 ## 下一步
 
-完成后，可以开始 **Task 004: HTTP API 服务**
-
----
-
-## 参考资料
-
-- [bnb-chain/tss-lib signing](https://github.com/bnb-chain/tss-lib/tree/master/ecdsa/signing)
-- [EIP-191 签名标准](https://eips.ethereum.org/EIPS/eip-191)
-- [EIP-155 交易签名](https://eips.ethereum.org/EIPS/eip-155)
+完成后，可以开始 **Task 005: Shard 2 存储层**

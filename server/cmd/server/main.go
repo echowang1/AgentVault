@@ -1,26 +1,30 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 
+	"github.com/echowang1/agent-vault/internal/api"
 	"github.com/echowang1/agent-vault/internal/config"
+	"github.com/echowang1/agent-vault/internal/tss"
+	"github.com/gin-gonic/gin"
 )
 
-type healthResponse struct {
-	Status  string `json:"status"`
-	Version string `json:"version"`
-}
+func newServer(cfg *config.Config) (*gin.Engine, error) {
+	keyGen, err := tss.NewKeyGenerator()
+	if err != nil {
+		return nil, err
+	}
 
-func healthHandler(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(healthResponse{
-		Status:  "ok",
-		Version: "0.1.0",
-	})
+	signer, err := tss.NewSigner(keyGen.(tss.ShardStorage))
+	if err != nil {
+		return nil, err
+	}
+
+	handler := api.NewWalletHandler(keyGen, signer)
+	router := gin.New()
+	api.RegisterRoutes(router, handler, cfg.APIKeys)
+	return router, nil
 }
 
 func main() {
@@ -29,10 +33,12 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	fmt.Println("MPC Wallet Server v0.1.0")
-	fmt.Printf("Server starting on %s:%d...\n", cfg.ServerHost, cfg.ServerPort)
+	router, err := newServer(cfg)
+	if err != nil {
+		log.Fatalf("failed to initialize server: %v", err)
+	}
 
-	http.HandleFunc("/health", healthHandler)
 	addr := fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Printf("MPC Wallet Server v0.1.0 listening on %s", addr)
+	log.Fatal(router.Run(addr))
 }
