@@ -1,466 +1,553 @@
-# Task 007: SDK 基础 + HTTP 客户端
+# Task 008: MPCWallet 类
 
 **负责人**: Codex
 **审核人**: Claude
-**预计时间**: 3-4 小时
-**依赖**: Task 004
+**预计时间**: 4-6 小时
+**依赖**: Task 007
 
 ---
 
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] TypeScript HTTP 客户端
-- [ ] 类型安全的 API 封装
-- [ ] 错误处理
-- [ ] 支持自定义 base URL
-- [ ] 支持自定义 timeout
+- [ ] MPCWallet 主类封装
+- [ ] 本地管理 Shard 1
+- [ ] ethers.js Signer 兼容接口
+- [ ] 支持创建和连接现有钱包
+- [ ] 签名交易和消息
 - [ ] 完整的类型定义
-- [ ] 单元测试（mock HTTP）
+- [ ] 单元测试
 
 ### 建议实现 (Should Have)
-- [ ] 请求重试机制
-- [ ] 请求/响应日志
-- [ ] 浏览器环境支持
+- [ ] viem 兼容
+- [ ] 事件监听（交易签名前/后）
+- [ ] 本地缓存钱包信息
 
 ---
 
-## 项目结构
-
-```
-sdk/
-├── src/
-│   ├── client.ts          # HTTP 客户端主类
-│   ├── types.ts           # TypeScript 类型定义
-│   ├── errors.ts          # 自定义错误类
-│   ├── utils.ts           # 工具函数
-│   └── index.ts           # 导出
-├── package.json
-├── tsconfig.json
-├── tsconfig.build.json
-└── vitest.config.ts       # 测试配置
-```
-
----
-
-## 类型定义
+## 接口定义
 
 ```typescript
-// sdk/src/types.ts
+// sdk/src/wallet.ts
+
+import type { Signer } from 'ethers';
+import type { MPCClient, Address, Hash, Shard } from './client';
 
 /**
- * 钱包地址
+ * 钱包配置
  */
-export type Address = `0x${string}`;
+export interface WalletConfig {
+  /**
+   * MPC 客户端配置
+   */
+  client: {
+    baseURL: string;
+    apiKey: string;
+    timeout?: number;
+  };
 
-/**
- * 32 字节的哈希值
- */
-export type Hash = `0x${string}`;
-
-/**
- * 私钥分片（base64 编码）
- */
-export type Shard = string;
-
-/**
- * 链 ID
- */
-export type ChainId = number;
-
-/**
- * 创建钱包请求
- */
-export interface CreateWalletRequest {
-  chainId?: ChainId;
+  /**
+   * 钱包存储（可选）
+   * 用于持久化 Shard 1
+   */
+  storage?: WalletStorage;
 }
 
 /**
- * 创建钱包响应
+ * 钱包存储接口
  */
-export interface CreateWalletResponse {
+export interface WalletStorage {
+  /**
+   * 保存钱包数据
+   */
+  save(address: Address, data: WalletData): Promise<void>;
+
+  /**
+   * 加载钱包数据
+   */
+  load(address: Address): Promise<WalletData | null>;
+
+  /**
+   * 删除钱包数据
+   */
+  remove(address: Address): Promise<void>;
+}
+
+/**
+ * 钱包持久化数据
+ */
+export interface WalletData {
   address: Address;
-  publicKey: string;
   shard1: Shard;
-  shard2Id: string;
-}
-
-/**
- * 签名请求
- */
-export interface SignRequest {
-  address: Address;
-  messageHash: Hash;
-  shard1: Shard;
-}
-
-/**
- * 签名响应
- */
-export interface SignResponse {
-  signature: Hash;
-  r: string;
-  s: string;
-  v: number;
-}
-
-/**
- * 钱包信息
- */
-export interface WalletInfo {
-  address: Address;
   publicKey: string;
-  createdAt: string;
+  chainId?: number;
 }
 
 /**
- * 策略定义
+ * 交易请求（兼容 ethers.js）
  */
-export interface Policy {
-  walletId: string;
-  singleTxLimit?: string;
-  dailyLimit?: string;
-  whitelist?: Address[];
-  dailyTxLimit?: number;
-  startTime?: string;
-  endTime?: string;
+export interface TransactionRequest {
+  to?: Address;
+  from?: Address;
+  value?: string | bigint;
+  data?: string;
+  gasLimit?: string | bigint;
+  gasPrice?: string | bigint;
+  maxFeePerGas?: string | bigint;
+  maxPriorityFeePerGas?: string | bigint;
+  nonce?: string | number;
+  chainId?: number;
 }
 
 /**
- * 每日使用情况
+ * 签名选项
  */
-export interface DailyUsage {
-  date: string; // YYYY-MM-DD
-  totalAmount: string;
-  txCount: number;
-}
-
-/**
- * API 错误响应
- */
-export interface APIError {
-  code: string;
-  message: string;
-  details?: Record<string, unknown>;
-}
-
-/**
- * API 响应（成功）
- */
-export interface APIResponse<T> {
-  success: true;
-  data: T;
-}
-
-/**
- * API 响应（失败）
- */
-export interface APIErrorResponse {
-  success: false;
-  error: APIError;
-}
-
-/**
- * 客户端配置
- */
-export interface MPCClientConfig {
+export interface SignOptions {
   /**
-   * API 基础 URL
+   * 是否在签名前检查策略
+   * @default true
    */
-  baseURL: string;
+  checkPolicy?: boolean;
+}
 
-  /**
-   * API Key
-   */
-  apiKey: string;
+/**
+ * 事件类型
+ */
+export type WalletEventType =
+  | 'beforeSign'
+  | 'afterSign'
+  | 'policyCheck'
+  | 'error';
 
-  /**
-   * 请求超时（毫秒）
-   * @default 30000
-   */
-  timeout?: number;
+/**
+ * 事件监听器
+ */
+export type WalletEventListener = (
+  event: WalletEvent,
+) => void | Promise<void>;
+
+/**
+ * 钱包事件
+ */
+export interface WalletEvent {
+  type: WalletEventType;
+  data?: Record<string, unknown>;
+  timestamp: Date;
+}
+
+/**
+ * MPC 钱包主类
+ */
+export class MPCWallet implements Partial<Signer> {
+  private readonly client: MPCClient;
+  private readonly storage?: WalletStorage;
+  private address?: Address;
+  private shard1?: Shard;
+  private publicKey?: string;
+  private chainId?: number;
+  private listeners: Map<WalletEventType, WalletEventListener[]>;
 
   /**
-   * 自定义 fetch 实现
+   * 创建钱包实例
    */
-  fetch?: typeof fetch;
+  constructor(config: WalletConfig);
+
+  /**
+   * 创建新钱包
+   * @returns 钱包地址
+   */
+  create(chainId?: number): Promise<Address>;
+
+  /**
+   * 连接现有钱包
+   * @param address 钱包地址
+   * @param shard1 密钥碎片 1
+   */
+  connect(address: Address, shard1: Shard): Promise<void>;
+
+  /**
+   * 从存储恢复钱包
+   * @param address 钱包地址
+   */
+  async load(address: Address): Promise<boolean>;
+
+  /**
+   * 断开连接
+   */
+  disconnect(): void;
+
+  /**
+   * 获取钱包地址
+   */
+  getAddress(): Address | undefined;
+
+  /**
+   * 获取链 ID
+   */
+  getChainId(): number | undefined;
+
+  /**
+   * 签名交易
+   * @param tx 交易请求
+   * @param options 签名选项
+   * @returns 签名后的交易哈希
+   */
+  signTransaction(tx: TransactionRequest, options?: SignOptions): Promise<string>;
+
+  /**
+   * 签名消息
+   * @param message 消息
+   * @returns 签名
+   */
+  signMessage(message: string | Uint8Array): Promise<string>;
+
+  /**
+   * 签名哈希
+   * @param hash 消息哈希
+   * @returns 签名
+   */
+  signHash(hash: Hash): Promise<string>;
+
+  /**
+   * 设置策略
+   * @param policy 策略配置
+   */
+  setPolicy(policy: Partial<Policy>): Promise<void>;
+
+  /**
+   * 获取策略
+   */
+  getPolicy(): Promise<Policy | null>;
+
+  /**
+   * 获取每日使用情况
+   */
+  getDailyUsage(): Promise<DailyUsage | null>;
+
+  /**
+   * 添加事件监听器
+   */
+  on(event: WalletEventType, listener: WalletEventListener): void;
+
+  /**
+   * 移除事件监听器
+   */
+  off(event: WalletEventType, listener: WalletEventListener): void;
+
+  /**
+   * ethers.js Signer 兼容方法
+   */
+  readonly provider: unknown; // 可选，用于 ethers 兼容
 }
+
+// 导出
+export type {
+  WalletConfig,
+  WalletStorage,
+  WalletData,
+  TransactionRequest,
+  SignOptions,
+  WalletEvent,
+  WalletEventListener,
+};
 ```
 
 ---
 
-## HTTP 客户端
+## 实现示例
 
 ```typescript
-// sdk/src/client.ts
+// sdk/src/wallet.ts (实现部分)
 
-import type {
-  MPCClientConfig,
-  CreateWalletRequest,
-  CreateWalletResponse,
-  SignRequest,
-  SignResponse,
-  WalletInfo,
-  Policy,
-  DailyUsage,
-  APIResponse,
-  APIErrorResponse,
-} from './types';
-import { MPCError, NetworkError, ValidationError } from './errors';
+import { MPCClient } from './client';
+import type { Address, Hash, Shard, Policy, DailyUsage } from './client';
+import { keccak256, toUtf8Bytes } from 'ethers';
 
-/**
- * MPC Wallet HTTP 客户端
- */
-export class MPCClient {
-  private readonly baseURL: string;
-  private readonly apiKey: string;
-  private readonly timeout: number;
-  private readonly fetch: typeof fetch;
+export class MPCWallet {
+  // ... 字段定义 ...
 
-  constructor(config: MPCClientConfig) {
-    this.baseURL = config.baseURL.replace(/\/$/, '');
-    this.apiKey = config.apiKey;
-    this.timeout = config.timeout ?? 30000;
-    this.fetch = config.fetch ?? globalThis.fetch;
+  constructor(config: WalletConfig) {
+    this.client = new MPCClient(config.client);
+    this.storage = config.storage;
+    this.listeners = new Map();
   }
 
   /**
    * 创建新钱包
    */
-  async createWallet(req?: CreateWalletRequest): Promise<CreateWalletResponse> {
-    const response = await this.post<CreateWalletResponse>(
-      '/api/v1/wallet/create',
-      req ?? {},
-    );
-    return response;
+  async create(chainId?: number): Promise<Address> {
+    const response = await this.client.createWallet({ chainId });
+
+    this.address = response.address;
+    this.shard1 = response.shard1;
+    this.publicKey = response.publicKey;
+    this.chainId = chainId;
+
+    // 持久化到存储
+    if (this.storage) {
+      await this.storage.save(this.address, {
+        address: this.address,
+        shard1: this.shard1,
+        publicKey: this.publicKey,
+        chainId: this.chainId,
+      });
+    }
+
+    return this.address;
+  }
+
+  /**
+   * 连接现有钱包
+   */
+  async connect(address: Address, shard1: Shard): Promise<void> {
+    // 验证钱包是否存在
+    const info = await this.client.getWallet(address);
+    if (!info) {
+      throw new Error('Wallet not found');
+    }
+
+    this.address = address;
+    this.shard1 = shard1;
+    this.publicKey = info.publicKey;
+
+    // 持久化
+    if (this.storage) {
+      await this.storage.save(address, {
+        address,
+        shard1,
+        publicKey: info.publicKey,
+      });
+    }
+  }
+
+  /**
+   * 从存储加载
+   */
+  async load(address: Address): Promise<boolean> {
+    if (!this.storage) {
+      throw new Error('No storage configured');
+    }
+
+    const data = await this.storage.load(address);
+    if (!data) {
+      return false;
+    }
+
+    this.address = data.address;
+    this.shard1 = data.shard1;
+    this.publicKey = data.publicKey;
+    this.chainId = data.chainId;
+
+    return true;
+  }
+
+  /**
+   * 断开连接
+   */
+  disconnect(): void {
+    this.address = undefined;
+    this.shard1 = undefined;
+    this.publicKey = undefined;
+  }
+
+  /**
+   * 获取地址
+   */
+  getAddress(): Address | undefined {
+    return this.address;
+  }
+
+  /**
+   * 签名交易
+   */
+  async signTransaction(
+    tx: TransactionRequest,
+    options?: SignOptions,
+  ): Promise<string> {
+    this.ensureConnected();
+
+    // 触发 beforeSign 事件
+    await this.emit('beforeSign', { type: 'transaction', tx });
+
+    // 计算交易哈希
+    const hash = await this.getTransactionHash(tx);
+
+    // 签名
+    const signature = await this.signHash(hash);
+
+    // 触发 afterSign 事件
+    await this.emit('afterSign', { hash, signature });
+
+    return signature;
   }
 
   /**
    * 签名消息
    */
-  async sign(req: SignRequest): Promise<SignResponse> {
-    this.validateSignRequest(req);
-    const response = await this.post<SignResponse>(
-      '/api/v1/wallet/sign',
-      req,
-    );
-    return response;
+  async signMessage(message: string | Uint8Array): Promise<string> {
+    this.ensureConnected();
+
+    const bytes = typeof message === 'string' ? toUtf8Bytes(message) : message;
+    const hash = keccak256(bytes) as Hash;
+
+    return this.signHash(hash);
   }
 
   /**
-   * 获取钱包信息
+   * 签名哈希
    */
-  async getWallet(address: string): Promise<WalletInfo> {
-    return this.get<WalletInfo>(`/api/v1/wallet/${address}`);
+  async signHash(hash: Hash): Promise<string> {
+    this.ensureConnected();
+    if (!this.shard1) {
+      throw new Error('No shard1 available');
+    }
+
+    const response = await this.client.sign({
+      address: this.address!,
+      messageHash: hash,
+      shard1: this.shard1,
+    });
+
+    return response.signature;
   }
 
   /**
-   * 设置钱包策略
+   * 设置策略
    */
-  async setPolicy(address: string, policy: Partial<Policy>): Promise<void> {
-    await this.put<void>(`/api/v1/wallet/${address}/policy`, policy);
+  async setPolicy(policy: Partial<Policy>): Promise<void> {
+    this.ensureConnected();
+    await this.client.setPolicy(this.address!, policy);
   }
 
   /**
-   * 获取钱包策略
+   * 获取策略
    */
-  async getPolicy(address: string): Promise<Policy> {
-    return this.get<Policy>(`/api/v1/wallet/${address}/policy`);
+  async getPolicy(): Promise<Policy | null> {
+    this.ensureConnected();
+    return this.client.getPolicy(this.address!);
   }
 
   /**
-   * 获取每日使用情况
+   * 添加事件监听
    */
-  async getDailyUsage(address: string): Promise<DailyUsage> {
-    return this.get<DailyUsage>(`/api/v1/wallet/${address}/usage`);
+  on(event: WalletEventType, listener: WalletEventListener): void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, []);
+    }
+    this.listeners.get(event)!.push(listener);
   }
 
   /**
-   * 健康检查
+   * 移除事件监听
    */
-  async healthCheck(): Promise<{ status: string; version: string }> {
-    return this.get('/health');
+  off(event: WalletEventType, listener: WalletEventListener): void {
+    const listeners = this.listeners.get(event);
+    if (listeners) {
+      const index = listeners.indexOf(listener);
+      if (index > -1) {
+        listeners.splice(index, 1);
+      }
+    }
   }
 
   // ========== 私有方法 ==========
 
-  private async get<T>(path: string): Promise<T> {
-    return this.request<T>('GET', path, undefined);
+  private ensureConnected(): void {
+    if (!this.address || !this.shard1) {
+      throw new Error('Wallet not connected. Call create() or connect() first.');
+    }
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
-    return this.request<T>('POST', path, body);
-  }
-
-  private async put<T>(path: string, body: unknown): Promise<T> {
-    return this.request<T>('PUT', path, body);
-  }
-
-  private async request<T>(
-    method: string,
-    path: string,
-    body: unknown,
-  ): Promise<T> {
-    const url = `${this.baseURL}${path}`;
-    const headers = {
-      'Authorization': `Bearer ${this.apiKey}`,
-      'Content-Type': 'application/json',
+  private async emit(
+    event: WalletEventType,
+    data?: Record<string, unknown>,
+  ): Promise<void> {
+    const listeners = this.listeners.get(event) ?? [];
+    const eventObj: WalletEvent = {
+      type: event,
+      data,
+      timestamp: new Date(),
     };
 
-    const options: RequestInit = {
-      method,
-      headers,
-      signal: AbortSignal.timeout(this.timeout),
-    };
-
-    if (body !== undefined) {
-      options.body = JSON.stringify(body);
-    }
-
-    try {
-      const response = await this.fetch(url, options);
-      await this.checkResponse(response);
-      const data = await response.json();
-      return (data as APIResponse<T>).data;
-    } catch (error) {
-      throw this.handleError(error);
+    for (const listener of listeners) {
+      await listener(eventObj);
     }
   }
 
-  private async checkResponse(response: Response): Promise<void> {
-    if (!response.ok) {
-      const data = await response.json() as APIErrorResponse;
-      throw new MPCError(data.error.code, data.error.message, data.error.details);
-    }
-  }
-
-  private handleError(error: unknown): Error {
-    if (error instanceof MPCError) {
-      return error;
-    }
-
-    if (error instanceof TypeError) {
-      return new NetworkError(error.message);
-    }
-
-    if (error instanceof Error) {
-      return error;
-    }
-
-    return new Error(String(error));
-  }
-
-  private validateSignRequest(req: SignRequest): void {
-    // 验证地址格式
-    if (!/^0x[a-fA-F0-9]{40}$/.test(req.address)) {
-      throw new ValidationError('Invalid address format');
-    }
-
-    // 验证哈希格式
-    if (!/^0x[a-fA-F0-9]{64}$/.test(req.messageHash)) {
-      throw new ValidationError('Invalid message hash format');
-    }
-
-    // 验证 shard1
-    if (!req.shard1 || req.shard1.length === 0) {
-      throw new ValidationError('shard1 is required');
-    }
+  private async getTransactionHash(tx: TransactionRequest): Promise<Hash> {
+    // 实现 RLP 编码和哈希计算
+    // 可以使用 ethers.js 的 utils
+    // ...
+    return '0x...' as Hash;
   }
 }
 ```
 
 ---
 
-## 错误处理
+## 内存存储实现
 
 ```typescript
-// sdk/src/errors.ts
+// sdk/src/storage/memory.ts
+
+import type { WalletStorage, WalletData } from './wallet';
+import type { Address } from './client';
 
 /**
- * MPC 客户端基础错误类
+ * 内存存储（用于测试）
  */
-export class MPCError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly details?: Record<string, unknown>,
-  ) {
-    super(message);
-    this.name = 'MPCError';
+export class MemoryWalletStorage implements WalletStorage {
+  private readonly store = new Map<Address, WalletData>();
+
+  async save(address: Address, data: WalletData): Promise<void> {
+    this.store.set(address, data);
   }
-}
 
-/**
- * 网络错误
- */
-export class NetworkError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NetworkError';
+  async load(address: Address): Promise<WalletData | null> {
+    return this.store.get(address) ?? null;
   }
-}
 
-/**
- * 验证错误
- */
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ValidationError';
-  }
-}
-
-/**
- * 认证错误
- */
-export class AuthError extends Error {
-  constructor(message: string = 'Authentication failed') {
-    super(message);
-    this.name = 'AuthError';
-  }
-}
-
-/**
- * 策略错误
- */
-export class PolicyError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'PolicyError';
+  async remove(address: Address): Promise<void> {
+    this.store.delete(address);
   }
 }
 ```
 
 ---
 
-## 导出
+## LocalStorage 实现
 
 ```typescript
-// sdk/src/index.ts
+// sdk/src/storage/local.ts
 
-export { MPCClient } from './client';
-export type {
-  MPCClientConfig,
-  CreateWalletRequest,
-  CreateWalletResponse,
-  SignRequest,
-  SignResponse,
-  WalletInfo,
-  Policy,
-  DailyUsage,
-  Address,
-  Hash,
-  Shard,
-  ChainId,
-} from './types';
+import type { WalletStorage, WalletData } from './wallet';
+import type { Address } from './client';
 
-export {
-  MPCError,
-  NetworkError,
-  ValidationError,
-  AuthError,
-  PolicyError,
-} from './errors';
+const STORAGE_PREFIX = 'mpc-wallet:';
+
+/**
+ * LocalStorage 存储（浏览器环境）
+ */
+export class LocalStorageWalletStorage implements WalletStorage {
+  async save(address: Address, data: WalletData): Promise<void> {
+    const key = `${STORAGE_PREFIX}${address}`;
+    localStorage.setItem(key, JSON.stringify(data));
+  }
+
+  async load(address: Address): Promise<WalletData | null> {
+    const key = `${STORAGE_PREFIX}${address}`;
+    const data = localStorage.getItem(key);
+    if (!data) {
+      return null;
+    }
+    return JSON.parse(data) as WalletData;
+  }
+
+  async remove(address: Address): Promise<void> {
+    const key = `${STORAGE_PREFIX}${address}`;
+    localStorage.removeItem(key);
+  }
+}
 ```
 
 ---
@@ -468,92 +555,156 @@ export {
 ## 测试用例
 
 ```typescript
-// sdk/src/client.test.ts
+// sdk/src/wallet.test.ts
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MPCClient } from './client';
-import type { CreateWalletResponse } from './types';
+import { MPCWallet } from './wallet';
+import { MemoryWalletStorage } from './storage/memory';
 
-describe('MPCClient', () => {
-  let client: MPCClient;
-  let mockFetch: ReturnType<typeof vi.fn>;
+describe('MPCWallet', () => {
+  let wallet: MPCWallet;
+  let mockClient: any;
 
   beforeEach(() => {
-    mockFetch = vi.fn();
-    client = new MPCClient({
-      baseURL: 'http://localhost:8080',
-      apiKey: 'test-api-key',
-      fetch: mockFetch,
+    // Mock MPCClient
+    mockClient = {
+      createWallet: vi.fn(),
+      getWallet: vi.fn(),
+      sign: vi.fn(),
+      setPolicy: vi.fn(),
+      getPolicy: vi.fn(),
+    };
+
+    wallet = new MPCWallet({
+      client: { baseURL: 'http://localhost', apiKey: 'test' },
+      storage: new MemoryWalletStorage(),
+    });
+
+    // 注入 mock client
+    (wallet as any).client = mockClient;
+  });
+
+  describe('create', () => {
+    it('should create a new wallet', async () => {
+      const mockAddress = '0x1234567890123456789012345678901234567890' as const;
+      mockClient.createWallet.mockResolvedValueOnce({
+        address: mockAddress,
+        publicKey: '0x...',
+        shard1: 'shard1-data',
+        shard2Id: 'shard2-id',
+      });
+
+      const address = await wallet.create();
+
+      expect(address).toBe(mockAddress);
+      expect(wallet.getAddress()).toBe(mockAddress);
+      expect(mockClient.createWallet).toHaveBeenCalledWith({});
+    });
+
+    it('should persist to storage', async () => {
+      const storage = new MemoryWalletStorage();
+      const walletWithStorage = new MPCWallet({
+        client: { baseURL: 'http://localhost', apiKey: 'test' },
+        storage,
+      });
+      (walletWithStorage as any).client = mockClient;
+
+      const mockAddress = '0x1234567890123456789012345678901234567890' as const;
+      mockClient.createWallet.mockResolvedValueOnce({
+        address: mockAddress,
+        publicKey: '0x...',
+        shard1: 'shard1-data',
+        shard2Id: 'shard2-id',
+      });
+
+      await walletWithStorage.create();
+
+      const data = await storage.load(mockAddress);
+      expect(data).toEqual({
+        address: mockAddress,
+        shard1: 'shard1-data',
+        publicKey: '0x...',
+      });
     });
   });
 
-  describe('createWallet', () => {
-    it('should create a wallet successfully', async () => {
-      const mockResponse: CreateWalletResponse = {
-        address: '0x1234567890123456789012345678901234567890',
+  describe('connect', () => {
+    it('should connect to existing wallet', async () => {
+      const mockAddress = '0x1234567890123456789012345678901234567890' as const;
+      mockClient.getWallet.mockResolvedValueOnce({
+        address: mockAddress,
         publicKey: '0x...',
-        shard1: 'base64data',
-        shard2Id: 'shard-2-id',
-      };
+        createdAt: '2026-02-21T00:00:00Z',
+      });
 
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          success: true,
-          data: mockResponse,
-        }),
-      } as Response);
+      await wallet.connect(mockAddress, 'shard1-data');
 
-      const result = await client.createWallet();
+      expect(wallet.getAddress()).toBe(mockAddress);
+    });
 
-      expect(result).toEqual(mockResponse);
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://localhost:8080/api/v1/wallet/create',
+    it('should throw if wallet not found', async () => {
+      mockClient.getWallet.mockResolvedValueOnce(null);
+
+      await expect(
+        wallet.connect('0x1234...7890' as any, 'shard1'),
+      ).rejects.toThrow('Wallet not found');
+    });
+  });
+
+  describe('signMessage', () => {
+    it('should sign a message', async () => {
+      mockClient.createWallet.mockResolvedValueOnce({
+        address: '0x1234...7890',
+        publicKey: '0x...',
+        shard1: 'shard1-data',
+        shard2Id: 'shard2-id',
+      });
+
+      mockClient.sign.mockResolvedValueOnce({
+        signature: '0xabcdef...',
+        r: '0x...',
+        s: '0x...',
+        v: 28,
+      });
+
+      await wallet.create();
+      const signature = await wallet.signMessage('Hello, World!');
+
+      expect(signature).toBe('0xabcdef...');
+    });
+
+    it('should throw if not connected', async () => {
+      await expect(wallet.signMessage('test')).rejects.toThrow('not connected');
+    });
+  });
+
+  describe('events', () => {
+    it('should emit beforeSign event', async () => {
+      const listener = vi.fn();
+      wallet.on('beforeSign', listener);
+
+      mockClient.createWallet.mockResolvedValueOnce({
+        address: '0x1234...7890',
+        publicKey: '0x...',
+        shard1: 'shard1-data',
+        shard2Id: 'shard2-id',
+      });
+
+      mockClient.sign.mockResolvedValueOnce({
+        signature: '0x...',
+        r: '0x...',
+        s: '0x...',
+        v: 28,
+      });
+
+      await wallet.create();
+      await wallet.signMessage('test');
+
+      expect(listener).toHaveBeenCalledWith(
         expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'Authorization': 'Bearer test-api-key',
-          }),
+          type: 'beforeSign',
         }),
       );
-    });
-
-    it('should handle errors', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-        json: async () => ({
-          success: false,
-          error: {
-            code: 'UNAUTHORIZED',
-            message: 'Invalid API key',
-          },
-        }),
-      } as Response);
-
-      await expect(client.createWallet()).rejects.toThrow('Invalid API key');
-    });
-  });
-
-  describe('sign', () => {
-    it('should validate address format', async () => {
-      await expect(
-        client.sign({
-          address: 'invalid' as any,
-          messageHash: '0x' + 'a'.repeat(64) as any,
-          shard1: 'test',
-        }),
-      ).rejects.toThrow('Invalid address format');
-    });
-
-    it('should validate hash format', async () => {
-      await expect(
-        client.sign({
-          address: '0x1234567890123456789012345678901234567890' as any,
-          messageHash: 'invalid' as any,
-          shard1: 'test',
-        }),
-      ).rejects.toThrow('Invalid message hash format');
     });
   });
 });
@@ -564,9 +715,11 @@ describe('MPCClient', () => {
 ## 完成标志
 
 ### 功能验证
-- [ ] 所有 API 方法可正常调用
-- [ ] 类型定义完整
-- [ ] 错误处理正确
+- [ ] 创建钱包功能正常
+- [ ] 连接钱包功能正常
+- [ ] 签名功能正常
+- [ ] 存储功能正常
+- [ ] 事件系统正常
 - [ ] 所有测试通过
 
 ### 代码质量
@@ -576,14 +729,10 @@ describe('MPCClient', () => {
 
 ### 构建验证
 - [ ] `npm run build` 成功
-- [ ] 生成的 `.d.ts` 文件正确
-
-### 发布准备
-- [ ] package.json 完整
-- [ ] README.md 有使用说明
+- [ ] 类型导出正确
 
 ---
 
 ## 下一步
 
-完成后，可以开始 **Task 008: MPCWallet 类**
+完成后，可以开始 **Task 009: 示例代码**

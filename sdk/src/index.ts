@@ -1,4 +1,6 @@
 export { MPCClient } from './client';
+export { MPCWallet } from './wallet';
+export { LocalStorageWalletStorage, MemoryWalletStorage } from './storage';
 
 export type {
   Address,
@@ -17,6 +19,17 @@ export type {
   SignResponse,
   WalletInfo,
 } from './types';
+
+export type {
+  SignOptions,
+  TransactionRequest,
+  WalletConfig,
+  WalletData,
+  WalletEvent,
+  WalletEventListener,
+  WalletEventType,
+  WalletStorage,
+} from './wallet';
 
 export {
   AuthError,
