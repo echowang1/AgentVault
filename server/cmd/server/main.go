@@ -8,6 +8,7 @@ import (
 
 	"github.com/echowang1/agent-vault/internal/api"
 	"github.com/echowang1/agent-vault/internal/config"
+	"github.com/echowang1/agent-vault/internal/policy"
 	"github.com/echowang1/agent-vault/internal/storage"
 	"github.com/echowang1/agent-vault/internal/tss"
 	"github.com/gin-gonic/gin"
@@ -42,7 +43,13 @@ func newServer(cfg *config.Config) (*gin.Engine, error) {
 		return nil, err
 	}
 
-	handler := api.NewWalletHandler(keyGen, signer, sqliteStore)
+	policyStore := policy.NewSQLiteStorage(sqliteStore.DB())
+	policyEngine, err := policy.NewPolicyEngine(policyStore)
+	if err != nil {
+		return nil, err
+	}
+
+	handler := api.NewWalletHandler(keyGen, signer, sqliteStore, policyEngine)
 	router := gin.New()
 	api.RegisterRoutes(router, handler, cfg.APIKeys)
 	return router, nil

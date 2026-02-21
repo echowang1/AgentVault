@@ -43,6 +43,10 @@ func (s *SQLiteStorage) Close() error {
 	return s.db.Close()
 }
 
+func (s *SQLiteStorage) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteStorage) migrate() error {
 	entries, err := migrations.ReadDir("migrations")
 	if err != nil {

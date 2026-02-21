@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/echowang1/agent-vault/internal/policy"
 	"github.com/echowang1/agent-vault/internal/storage"
 	"github.com/echowang1/agent-vault/internal/tss"
 	"github.com/gin-gonic/gin"
@@ -31,7 +33,11 @@ func setupTestRouter(t *testing.T) *gin.Engine {
 	signer, err := tss.NewSigner(keyGen.(tss.ShardStorage))
 	require.NoError(t, err)
 
-	h := NewWalletHandler(keyGen, signer, sqlStore)
+	policyStore := policy.NewSQLiteStorage(sqlStore.DB())
+	policyEngine, err := policy.NewPolicyEngine(policyStore)
+	require.NoError(t, err)
+
+	h := NewWalletHandler(keyGen, signer, sqlStore, policyEngine)
 	r := gin.New()
 	RegisterRoutes(r, h, map[string]bool{"test-api-key": true})
 	return r
@@ -73,7 +79,7 @@ func TestCreateWallet_NoAPIKey(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-func TestSignAndGetWallet_Success(t *testing.T) {
+func TestPolicyAndSignFlow(t *testing.T) {
 	r := setupTestRouter(t)
 
 	createReq, _ := http.NewRequest(http.MethodPost, "/api/v1/wallet/create", bytes.NewReader([]byte(`{}`)))
@@ -86,31 +92,70 @@ func TestSignAndGetWallet_Success(t *testing.T) {
 	var createResp struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Address  string `json:"address"`
-			Shard1   string `json:"shard1"`
-			Shard2ID string `json:"shard2_id"`
+			Address string `json:"address"`
+			Shard1  string `json:"shard1"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(createW.Body.Bytes(), &createResp))
 
-	signBody := map[string]string{
+	putPolicyBody := map[string]interface{}{
+		"single_tx_limit": "100",
+		"daily_limit":     "1000",
+		"whitelist":       []string{"0xabc"},
+		"daily_tx_limit":  2,
+		"start_time":      time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+		"end_time":        time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	}
+	policyBytes, _ := json.Marshal(putPolicyBody)
+	policyReq, _ := http.NewRequest(http.MethodPut, "/api/v1/wallet/"+createResp.Data.Address+"/policy", bytes.NewReader(policyBytes))
+	policyReq.Header.Set("Authorization", "Bearer test-api-key")
+	policyReq.Header.Set("Content-Type", "application/json")
+	policyW := httptest.NewRecorder()
+	r.ServeHTTP(policyW, policyReq)
+	require.Equal(t, http.StatusOK, policyW.Code)
+
+	getPolicyReq, _ := http.NewRequest(http.MethodGet, "/api/v1/wallet/"+createResp.Data.Address+"/policy", nil)
+	getPolicyReq.Header.Set("Authorization", "Bearer test-api-key")
+	getPolicyW := httptest.NewRecorder()
+	r.ServeHTTP(getPolicyW, getPolicyReq)
+	require.Equal(t, http.StatusOK, getPolicyW.Code)
+	assert.Contains(t, getPolicyW.Body.String(), "single_tx_limit")
+
+	signBadBody := map[string]string{
 		"address":      createResp.Data.Address,
 		"message_hash": "0x95ad83f5c0e9ceccaf53f989ec3b8f226f97d2bd8717fdad4d2aa5b6b0f7d9b5",
 		"shard1":       createResp.Data.Shard1,
+		"to":           "0xdef",
+		"value":        "10",
 	}
-	bodyBytes, _ := json.Marshal(signBody)
-	signReq, _ := http.NewRequest(http.MethodPost, "/api/v1/wallet/sign", bytes.NewReader(bodyBytes))
-	signReq.Header.Set("Authorization", "Bearer test-api-key")
-	signReq.Header.Set("Content-Type", "application/json")
-	signW := httptest.NewRecorder()
-	r.ServeHTTP(signW, signReq)
-	require.Equal(t, http.StatusOK, signW.Code)
-	assert.Contains(t, signW.Body.String(), "signature")
+	signBadBytes, _ := json.Marshal(signBadBody)
+	signBadReq, _ := http.NewRequest(http.MethodPost, "/api/v1/wallet/sign", bytes.NewReader(signBadBytes))
+	signBadReq.Header.Set("Authorization", "Bearer test-api-key")
+	signBadReq.Header.Set("Content-Type", "application/json")
+	signBadW := httptest.NewRecorder()
+	r.ServeHTTP(signBadW, signBadReq)
+	require.Equal(t, http.StatusBadRequest, signBadW.Code)
 
-	getReq, _ := http.NewRequest(http.MethodGet, "/api/v1/wallet/"+createResp.Data.Address, nil)
-	getReq.Header.Set("Authorization", "Bearer test-api-key")
-	getW := httptest.NewRecorder()
-	r.ServeHTTP(getW, getReq)
-	require.Equal(t, http.StatusOK, getW.Code)
-	assert.Contains(t, getW.Body.String(), createResp.Data.Address)
+	signOkBody := map[string]string{
+		"address":      createResp.Data.Address,
+		"message_hash": "0x95ad83f5c0e9ceccaf53f989ec3b8f226f97d2bd8717fdad4d2aa5b6b0f7d9b5",
+		"shard1":       createResp.Data.Shard1,
+		"to":           "0xabc",
+		"value":        "10",
+	}
+	signOkBytes, _ := json.Marshal(signOkBody)
+	signOkReq, _ := http.NewRequest(http.MethodPost, "/api/v1/wallet/sign", bytes.NewReader(signOkBytes))
+	signOkReq.Header.Set("Authorization", "Bearer test-api-key")
+	signOkReq.Header.Set("Content-Type", "application/json")
+	signOkW := httptest.NewRecorder()
+	r.ServeHTTP(signOkW, signOkReq)
+	require.Equal(t, http.StatusOK, signOkW.Code)
+	assert.Contains(t, signOkW.Body.String(), "signature")
+
+	usageReq, _ := http.NewRequest(http.MethodGet, "/api/v1/wallet/"+createResp.Data.Address+"/usage", nil)
+	usageReq.Header.Set("Authorization", "Bearer test-api-key")
+	usageW := httptest.NewRecorder()
+	r.ServeHTTP(usageW, usageReq)
+	require.Equal(t, http.StatusOK, usageW.Code)
+	assert.Contains(t, usageW.Body.String(), "tx_count")
 }

@@ -12,5 +12,8 @@ func RegisterRoutes(router *gin.Engine, handler *WalletHandler, apiKeys map[stri
 		v1.POST("/wallet/create", handler.CreateWallet)
 		v1.POST("/wallet/sign", handler.Sign)
 		v1.GET("/wallet/:address", handler.GetWallet)
+		v1.PUT("/wallet/:address/policy", handler.SetPolicy)
+		v1.GET("/wallet/:address/policy", handler.GetPolicy)
+		v1.GET("/wallet/:address/usage", handler.GetUsage)
 	}
 }
