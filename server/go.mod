@@ -48,6 +48,7 @@ require (
 	github.com/ipfs/go-log v0.0.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/opentracing/opentracing-go v1.1.0 // indirect
 	github.com/otiai10/primes v0.0.0-20180210170552-f6d2a1ba97c4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

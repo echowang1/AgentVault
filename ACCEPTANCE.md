@@ -1,290 +1,248 @@
-# Task 004: HTTP Server + 基础路由
+# Task 005: Shard 2 存储层
 
 **负责人**: Codex
 **审核人**: Claude
 **预计时间**: 3-4 小时
-**依赖**: Task 002, 003
+**依赖**: Task 002
 
 ---
 
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] 使用 `gin-gonic/gin` 框架
-- [ ] 健康检查端点 `GET /health`
-- [ ] 创建钱包 `POST /api/v1/wallet/create`
-- [ ] 签名交易 `POST /api/v1/wallet/sign`
-- [ ] 查询钱包 `GET /api/v1/wallet/:address`
-- [ ] CORS 中间件
-- [ ] API Key 认证中间件
-- [ ] 请求日志中间件
-- [ ] 错误处理统一格式
+- [ ] SQLite 存储实现
+- [ ] AES-256-GCM 加密存储 Shard 2
+- [ ] CRUD 操作 (Create, Read, Update, Delete)
+- [ ] 数据库迁移脚本
+- [ ] 完整的单元测试
 
 ### 建议实现 (Should Have)
-- [ ] 请求 ID 追踪
-- [ ] 指标端点 `/metrics`
-- [ ] 优雅关闭
-
----
-
-## API 设计
-
-### 健康检查
-
-```http
-GET /health
-
-响应:
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "timestamp": "2026-02-21T10:00:00Z"
-}
-```
-
-### 创建钱包
-
-```http
-POST /api/v1/wallet/create
-Authorization: Bearer <API_KEY>
-Content-Type: application/json
-
-请求体: (可选)
-{
-  "chain_id": "1"  // 默认 1 (Ethereum)
-}
-
-响应:
-{
-  "success": true,
-  "data": {
-    "address": "0x...",
-    "public_key": "0x...",
-    "shard1": "base64...",
-    "shard2_id": "uuid-..."
-  }
-}
-```
-
-### 签名交易
-
-```http
-POST /api/v1/wallet/sign
-Authorization: Bearer <API_KEY>
-Content-Type: application/json
-
-请求:
-{
-  "address": "0x...",
-  "message_hash": "0x...",  // 32 字节，十六进制
-  "shard1": "base64..."
-}
-
-响应:
-{
-  "success": true,
-  "data": {
-    "signature": "0x...",  // 130 字符 (0x + r64 + s64 + v2)
-    "r": "0x...",
-    "s": "0x...",
-    "v": 28
-  }
-}
-```
-
-### 查询钱包
-
-```http
-GET /api/v1/wallet/:address
-Authorization: Bearer <API_KEY>
-
-响应:
-{
-  "success": true,
-  "data": {
-    "address": "0x...",
-    "public_key": "0x...",
-    "created_at": "2026-02-21T10:00:00Z"
-  }
-}
-```
-
-### 错误响应格式
-
-```json
-{
-  "success": false,
-  "error": {
-    "code": "INVALID_REQUEST",
-    "message": "详细错误信息",
-    "details": {}
-  }
-}
-```
+- [ ] PostgreSQL 支持（接口抽象）
+- [ ] 连接池管理
+- [ ] 备份机制
 
 ---
 
 ## 接口定义
 
 ```go
-// server/internal/api/handler.go
-package api
+// server/internal/storage/storage.go
+package storage
 
 import (
-    "net/http"
-    "github.com/gin-gonic/gin"
+    "context"
+    "time"
 )
 
-// WalletHandler 钱包处理器
-type WalletHandler struct {
-    keyGen   tss.KeyGenerator
-    signer   tss.Signer
-    storage  storage.ShardStorage
+// ShardStorage 密钥分片存储接口
+type ShardStorage interface {
+    // Store 存储 Shard 2（加密）
+    Store(ctx context.Context, id string, shard2 []byte) error
+
+    // Load 加载 Shard 2（解密）
+    Load(ctx context.Context, id string) ([]byte, error)
+
+    // Exists 检查是否存在
+    Exists(ctx context.Context, id string) (bool, error)
+
+    // Delete 删除 Shard 2
+    Delete(ctx context.Context, id string) error
+
+    // List 列出所有钱包地址
+    List(ctx context.Context) ([]string, error)
 }
 
-// NewWalletHandler 创建处理器
-func NewWalletHandler(
-    keyGen tss.KeyGenerator,
-    signer tss.Signer,
-    storage storage.ShardStorage,
-) *WalletHandler
-
-// RegisterRoutes 注册路由
-func (h *WalletHandler) RegisterRoutes(r *gin.Engine)
-```
-
----
-
-## 中间件要求
-
-### API Key 认证
-
-```go
-// server/internal/api/middleware.go
-package api
-
-import "github.com/gin-gonic/gin"
-
-// APIKeyAuth API Key 认证中间件
-func APIKeyAuth(validKeys map[string]bool) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        apiKey := c.GetHeader("Authorization")
-        if apiKey == "" {
-            c.JSON(401, gin.H{"error": "missing API key"})
-            c.Abort()
-            return
-        }
-
-        // 提取 Bearer token
-        if len(apiKey) > 7 && apiKey[:7] == "Bearer " {
-            apiKey = apiKey[7:]
-        }
-
-        if !validKeys[apiKey] {
-            c.JSON(401, gin.H{"error": "invalid API key"})
-            c.Abort()
-            return
-        }
-
-        c.Next()
-    }
+// WalletInfo 钱包信息
+type WalletInfo struct {
+    ID            string    `json:"id"`             // 钱包 ID
+    Address       string    `json:"address"`        // 以太坊地址
+    PublicKey     string    `json:"public_key"`     // 公钥
+    Shard2ID      string    `json:"shard2_id"`      // Shard 2 的存储 ID
+    CreatedAt     time.Time `json:"created_at"`     // 创建时间
+    UpdatedAt     time.Time `json:"updated_at"`     // 更新时间
 }
-```
 
-### CORS
+// WalletStorage 钱包存储接口
+type WalletStorage interface {
+    // Create 创建钱包记录
+    Create(ctx context.Context, info *WalletInfo) error
 
-```go
-// CORSMiddleware CORS 中间件
-func CORSMiddleware() gin.HandlerFunc {
-    return func(c *gin.Context) {
-        c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-        c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-        c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-        c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+    // GetByAddress 根据地址获取钱包信息
+    GetByAddress(ctx context.Context, address string) (*WalletInfo, error)
 
-        if c.Request.Method == "OPTIONS" {
-            c.AbortWithStatus(204)
-            return
-        }
+    // GetByID 根据 ID 获取钱包信息
+    GetByID(ctx context.Context, id string) (*WalletInfo, error)
 
-        c.Next()
-    }
+    // Update 更新钱包信息
+    Update(ctx context.Context, info *WalletInfo) error
+
+    // Delete 删除钱包
+    Delete(ctx context.Context, id string) error
 }
 ```
 
 ---
 
-## 测试用例
+## 数据库 Schema
 
-### 单元测试
+```sql
+-- migrations/001_initial_schema.sql
+
+CREATE TABLE wallets (
+    id TEXT PRIMARY KEY,
+    address TEXT UNIQUE NOT NULL,
+    public_key TEXT NOT NULL,
+    shard2_id TEXT UNIQUE NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_wallets_address ON wallets(address);
+CREATE INDEX idx_wallets_shard2_id ON wallets(shard2_id);
+
+CREATE TABLE key_shards (
+    id TEXT PRIMARY KEY,
+    shard2_encrypted BLOB NOT NULL,
+    nonce BLOB NOT NULL,  -- GCM nonce
+    created_at INTEGER NOT NULL
+);
+```
+
+---
+
+## 加密要求
 
 ```go
-// server/internal/api/handler_test.go
-package api
+// server/internal/storage/encrypt.go
+package storage
 
 import (
-    "bytes"
-    "encoding/json"
-    "net/http"
-    "net/http/httptest"
-    "testing"
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
+    "crypto/aes"
+    "crypto/cipher"
+    "crypto/rand"
+    "encoding/base64"
+    "io"
 )
 
-func TestHealthCheck(t *testing.T) {
-    router := setupTestRouter()
+// Encryptor 加密器接口
+type Encryptor interface {
+    // Encrypt 加密数据
+    Encrypt(plaintext []byte) ([]byte, error)
 
-    req, _ := http.NewRequest("GET", "/health", nil)
-    w := httptest.NewRecorder()
-
-    router.ServeHTTP(w, req)
-
-    assert.Equal(t, 200, w.Code)
-    assert.Contains(t, w.Body.String(), "ok")
+    // Decrypt 解密数据
+    Decrypt(ciphertext []byte) ([]byte, error)
 }
 
-func TestCreateWallet_Success(t *testing.T) {
-    router := setupTestRouter()
+// AES256GCMEncryptor AES-256-GCM 加密器
+type AES256GCMEncryptor struct {
+    key []byte // 32 字节密钥
+}
 
-    body := map[string]interface{}{
-        "chain_id": "1",
+// NewAES256GCMEncryptor 创建加密器
+// 密钥从环境变量 SHARD_ENCRYPTION_KEY 读取（base64 编码的 32 字节）
+func NewAES256GCMEncryptor(key []byte) (*AES256GCMEncryptor, error) {
+    if len(key) != 32 {
+        return nil, ErrInvalidKeySize
     }
-    jsonBody, _ := json.Marshal(body)
-
-    req, _ := http.NewRequest("POST", "/api/v1/wallet/create", bytes.NewReader(jsonBody))
-    req.Header.Set("Authorization", "Bearer test-api-key")
-    req.Header.Set("Content-Type", "application/json")
-
-    w := httptest.NewRecorder()
-    router.ServeHTTP(w, req)
-
-    assert.Equal(t, 200, w.Code)
-
-    var resp map[string]interface{}
-    json.Unmarshal(w.Body.Bytes(), &resp)
-
-    assert.True(t, resp["success"].(bool))
-    data := resp["data"].(map[string]interface{})
-    assert.Regexp(t, "^0x[a-fA-F0-9]{40}$", data["address"])
-    assert.NotEmpty(t, data["shard1"])
-    assert.NotEmpty(t, data["shard2_id"])
+    return &AES256GCMEncryptor{key: key}, nil
 }
 
-func TestCreateWallet_NoAPIKey(t *testing.T) {
-    router := setupTestRouter()
+// Encrypt 加密（AES-256-GCM）
+func (e *AES256GCMEncryptor) Encrypt(plaintext []byte) ([]byte, error) {
+    block, err := aes.NewCipher(e.key)
+    if err != nil {
+        return nil, err
+    }
 
-    req, _ := http.NewRequest("POST", "/api/v1/wallet/create", nil)
-    w := httptest.NewRecorder()
+    gcm, err := cipher.NewGCM(block)
+    if err != nil {
+        return nil, err
+    }
 
-    router.ServeHTTP(w, req)
+    nonce := make([]byte, gcm.NonceSize())
+    if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+        return nil, err
+    }
 
-    assert.Equal(t, 401, w.Code)
+    ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+    return ciphertext, nil
 }
 
-func TestSign_Success(t *testing.T) {
-    // 1. 先创建钱包
-    // 2. 然后签名
+// Decrypt 解密
+func (e *AES256GCMEncryptor) Decrypt(ciphertext []byte) ([]byte, error) {
+    block, err := aes.NewCipher(e.key)
+    if err != nil {
+        return nil, err
+    }
+
+    gcm, err := cipher.NewGCM(block)
+    if err != nil {
+        return nil, err
+    }
+
+    nonceSize := gcm.NonceSize()
+    if len(ciphertext) < nonceSize {
+        return nil, ErrInvalidCiphertext
+    }
+
+    nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+    return gcm.Open(nil, nonce, ciphertext, nil)
+}
+```
+
+---
+
+## SQLite 实现
+
+```go
+// server/internal/storage/sqlite.go
+package storage
+
+import (
+    "context"
+    "database/sql"
+    "embed"
+    "fmt"
+    "time"
+
+    _ "github.com/mattn/go-sqlite3"
+)
+
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+// SQLiteStorage SQLite 实现
+type SQLiteStorage struct {
+    db        *sql.DB
+    encryptor Encryptor
+}
+
+// NewSQLiteStorage 创建 SQLite 存储
+func NewSQLiteStorage(dbPath string, encryptor Encryptor) (*SQLiteStorage, error) {
+    db, err := sql.Open("sqlite3", dbPath)
+    if err != nil {
+        return nil, err
+    }
+
+    // 启用外键约束
+    db.Exec("PRAGMA foreign_keys = ON")
+
+    storage := &SQLiteStorage{
+        db:        db,
+        encryptor: encryptor,
+    }
+
+    // 运行迁移
+    if err := storage.migrate(); err != nil {
+        return nil, err
+    }
+
+    return storage, nil
+}
+
+// migrate 运行数据库迁移
+func (s *SQLiteStorage) migrate() error {
+    // 实现迁移逻辑
     // ...
 }
 ```
@@ -294,38 +252,146 @@ func TestSign_Success(t *testing.T) {
 ## 配置要求
 
 ```go
-// server/internal/config/config.go
-package config
+// server/internal/storage/config.go
+package storage
 
 type Config struct {
-    Server   ServerConfig   `mapstructure:"server"`
-    APIKeys  map[string]bool `mapstructure:"api_keys"`
+    Type     string `mapstructure:"type"`     // sqlite, postgres
+    Path     string `mapstructure:"path"`     // 数据库路径
+    Host     string `mapstructure:"host"`     // PostgreSQL host
+    Port     int    `mapstructure:"port"`     // PostgreSQL port
+    Database string `mapstructure:"database"` // Database name
+    User     string `mapstructure:"user"`     // User
+    Password string `mapstructure:"password"` // Password
 }
-
-type ServerConfig struct {
-    Host            string `mapstructure:"host"`
-    Port            int    `mapstructure:"port"`
-    ReadTimeout     int    `mapstructure:"read_timeout"`
-    WriteTimeout    int    `mapstructure:"write_timeout"`
-    ShutdownTimeout int    `mapstructure:"shutdown_timeout"`
-}
-
-// Load 加载配置
-func Load() (*Config, error)
 ```
 
 ---
 
-## 文件结构
+## 环境变量
 
+```bash
+# 加密密钥（base64 编码的 32 字节）
+SHARD_ENCRYPTION_KEY=<base64-encoded-32-bytes>
+
+# 数据库路径
+DB_PATH=./data/mpc-wallet.db
+
+# 或使用 PostgreSQL
+DB_TYPE=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=mpc_wallet
+DB_USER=postgres
+DB_PASSWORD=postgres
 ```
-server/internal/api/
-├── handler.go              # 处理器
-├── middleware.go           # 中间件
-├── routes.go               # 路由注册
-├── response.go             # 响应格式
-├── handler_test.go         # 单元测试
-└── errors.go               # 错误定义
+
+---
+
+## 测试用例
+
+```go
+// server/internal/storage/sqlite_test.go
+package storage
+
+import (
+    "context"
+    "os"
+    "testing"
+    "time"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+)
+
+func setupTestDB(t *testing.T) *SQLiteStorage {
+    // 使用内存数据库
+    key := make([]byte, 32)
+    encryptor, err := NewAES256GCMEncryptor(key)
+    require.NoError(t, err)
+
+    storage, err := NewSQLiteStorage(":memory:", encryptor)
+    require.NoError(t, err)
+
+    return storage
+}
+
+func TestStoreAndLoad(t *testing.T) {
+    storage := setupTestDB(t)
+    ctx := context.Background()
+
+    shard2 := []byte("test-shard-data")
+    id := "test-id"
+
+    // 存储
+    err := storage.Store(ctx, id, shard2)
+    require.NoError(t, err)
+
+    // 加载
+    loaded, err := storage.Load(ctx, id)
+    require.NoError(t, err)
+    assert.Equal(t, shard2, loaded)
+}
+
+func TestEncryption(t *testing.T) {
+    key := make([]byte, 32)
+    encryptor, err := NewAES256GCMEncryptor(key)
+    require.NoError(t, err)
+
+    plaintext := []byte("sensitive-shard-data")
+
+    // 加密
+    ciphertext, err := encryptor.Encrypt(plaintext)
+    require.NoError(t, err)
+
+    // 密文不同
+    assert.NotEqual(t, plaintext, ciphertext)
+
+    // 解密
+    decrypted, err := encryptor.Decrypt(ciphertext)
+    require.NoError(t, err)
+    assert.Equal(t, plaintext, decrypted)
+}
+
+func TestWalletCRUD(t *testing.T) {
+    storage := setupTestDB(t)
+    ctx := context.Background()
+
+    info := &WalletInfo{
+        ID:        "wallet-1",
+        Address:   "0x1234567890123456789012345678901234567890",
+        PublicKey: "0x...",
+        Shard2ID:  "shard-2",
+        CreatedAt: time.Now(),
+        UpdatedAt: time.Now(),
+    }
+
+    // Create
+    err := storage.Create(ctx, info)
+    require.NoError(t, err)
+
+    // GetByAddress
+    loaded, err := storage.GetByAddress(ctx, info.Address)
+    require.NoError(t, err)
+    assert.Equal(t, info.Address, loaded.Address)
+
+    // GetByID
+    loaded, err = storage.GetByID(ctx, info.ID)
+    require.NoError(t, err)
+    assert.Equal(t, info.ID, loaded.ID)
+
+    // Update
+    loaded.UpdatedAt = time.Now()
+    err = storage.Update(ctx, loaded)
+    require.NoError(t, err)
+
+    // Delete
+    err = storage.Delete(ctx, info.ID)
+    require.NoError(t, err)
+
+    // 验证删除
+    _, err = storage.GetByID(ctx, info.ID)
+    assert.Error(t, err)
+}
 ```
 
 ---
@@ -333,42 +399,23 @@ server/internal/api/
 ## 完成标志
 
 ### 功能验证
-- [ ] 所有 API 端点可访问
-- [ ] API Key 认证正常工作
-- [ ] 错误响应格式统一
-- [ ] 所有测试通过
+- [ ] Shard 2 加密后存储
+- [ ] 可以正确读取和解密
+- [ ] CRUD 操作正常
+- [ ] 数据库迁移脚本可执行
 
 ### 代码质量
 - [ ] `go test ./...` 通过
 - [ ] `golangci-lint run` 通过
-- [ ] 测试覆盖率 > 70%
+- [ ] 测试覆盖率 > 80%
 
-### 集成验证
-- [ ] 可以用 curl 测试所有端点
-- [ ] 提供测试脚本
-
----
-
-## 验证命令
-
-```bash
-# 健康检查
-curl http://localhost:8080/health
-
-# 创建钱包
-curl -X POST http://localhost:8080/api/v1/wallet/create \
-  -H "Authorization: Bearer test-key" \
-  -H "Content-Type: application/json"
-
-# 签名
-curl -X POST http://localhost:8080/api/v1/wallet/sign \
-  -H "Authorization: Bearer test-key" \
-  -H "Content-Type: application/json" \
-  -d '{"address":"0x...","message_hash":"0x...","shard1":"..."}'
-```
+### 安全验证
+- [ ] 密钥从环境变量读取
+- [ ] 硬编码密钥测试失败
+- [ ] 解密错误数据返回错误
 
 ---
 
 ## 下一步
 
-完成后，可以开始 **Task 005: Shard 2 存储层**
+完成后，可以开始 **Task 006: 策略引擎**

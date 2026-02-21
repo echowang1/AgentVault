@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/echowang1/agent-vault/internal/storage"
 	"github.com/echowang1/agent-vault/internal/tss"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -17,13 +18,20 @@ func setupTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	keyGen, err := tss.NewKeyGenerator()
+	encryptor, err := storage.NewAES256GCMEncryptor(make([]byte, 32))
+	require.NoError(t, err)
+
+	sqlStore, err := storage.NewSQLiteStorage(":memory:", encryptor)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlStore.Close() })
+
+	keyGen, err := tss.NewKeyGeneratorWithStorage(sqlStore)
 	require.NoError(t, err)
 
 	signer, err := tss.NewSigner(keyGen.(tss.ShardStorage))
 	require.NoError(t, err)
 
-	h := NewWalletHandler(keyGen, signer)
+	h := NewWalletHandler(keyGen, signer, sqlStore)
 	r := gin.New()
 	RegisterRoutes(r, h, map[string]bool{"test-api-key": true})
 	return r

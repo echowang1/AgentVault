@@ -18,6 +18,7 @@ import (
 
 	tsskeygen "github.com/bnb-chain/tss-lib/v2/ecdsa/keygen"
 	"github.com/bnb-chain/tss-lib/v2/tss"
+	"github.com/echowang1/agent-vault/internal/storage"
 	gethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -43,10 +44,19 @@ type keyGenerator struct {
 	mu            sync.RWMutex
 	storage       map[string]encryptedShard
 	saveDataCache map[string]tsskeygen.LocalPartySaveData
+	persistent    storage.ShardStorage
 	encryptionKey []byte
 }
 
 func NewKeyGenerator() (KeyGenerator, error) {
+	return newKeyGenerator(nil)
+}
+
+func NewKeyGeneratorWithStorage(shardStore storage.ShardStorage) (KeyGenerator, error) {
+	return newKeyGenerator(shardStore)
+}
+
+func newKeyGenerator(shardStore storage.ShardStorage) (KeyGenerator, error) {
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, ErrKeyGenFailed
@@ -55,6 +65,7 @@ func NewKeyGenerator() (KeyGenerator, error) {
 	return &keyGenerator{
 		storage:       make(map[string]encryptedShard),
 		saveDataCache: make(map[string]tsskeygen.LocalPartySaveData),
+		persistent:    shardStore,
 		encryptionKey: key,
 	}, nil
 }
@@ -111,8 +122,14 @@ func (k *keyGenerator) GenerateKeyWithProgress(ctx context.Context, callback Pro
 
 	emit(callback, "storing server shard", 85)
 	shard2ID := randomID("shard2")
-	if err := k.saveEncryptedShard2(shard2ID, shard2Raw); err != nil {
-		return nil, ErrKeyGenFailed
+	if k.persistent != nil {
+		if err := k.persistent.Store(ctx, shard2ID, shard2Raw); err != nil {
+			return nil, ErrKeyGenFailed
+		}
+	} else {
+		if err := k.saveEncryptedShard2(shard2ID, shard2Raw); err != nil {
+			return nil, ErrKeyGenFailed
+		}
 	}
 
 	pub := saveDataToPublicKey(shard1Save)
@@ -132,6 +149,13 @@ func (k *keyGenerator) GenerateKeyWithProgress(ctx context.Context, callback Pro
 func (k *keyGenerator) LoadShard2(ctx context.Context, shard2ID string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ErrContextCanceled
+	}
+	if k.persistent != nil {
+		plain, err := k.persistent.Load(ctx, shard2ID)
+		if err != nil {
+			return nil, ErrShardNotFound
+		}
+		return plain, nil
 	}
 	plain, err := k.loadAndDecryptShard2(shard2ID)
 	if err != nil {

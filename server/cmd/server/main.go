@@ -3,15 +3,36 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 
 	"github.com/echowang1/agent-vault/internal/api"
 	"github.com/echowang1/agent-vault/internal/config"
+	"github.com/echowang1/agent-vault/internal/storage"
 	"github.com/echowang1/agent-vault/internal/tss"
 	"github.com/gin-gonic/gin"
 )
 
 func newServer(cfg *config.Config) (*gin.Engine, error) {
-	keyGen, err := tss.NewKeyGenerator()
+	encryptor, err := storage.NewAES256GCMEncryptorFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "./data/mpc-wallet.db"
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, err
+	}
+
+	sqliteStore, err := storage.NewSQLiteStorage(dbPath, encryptor)
+	if err != nil {
+		return nil, err
+	}
+
+	keyGen, err := tss.NewKeyGeneratorWithStorage(sqliteStore)
 	if err != nil {
 		return nil, err
 	}
@@ -21,7 +42,7 @@ func newServer(cfg *config.Config) (*gin.Engine, error) {
 		return nil, err
 	}
 
-	handler := api.NewWalletHandler(keyGen, signer)
+	handler := api.NewWalletHandler(keyGen, signer, sqliteStore)
 	router := gin.New()
 	api.RegisterRoutes(router, handler, cfg.APIKeys)
 	return router, nil
