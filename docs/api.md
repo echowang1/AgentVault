@@ -40,9 +40,12 @@ Response:
 
 ```json
 {
-  "status": "ok",
-  "version": "0.1.0",
-  "timestamp": "2026-02-21T18:00:00Z"
+  "success": true,
+  "data": {
+    "status": "ok",
+    "version": "0.1.0",
+    "timestamp": "2026-02-21T18:00:00Z"
+  }
 }
 ```
 
@@ -167,5 +170,9 @@ Current API-level error codes:
 - `INVALID_REQUEST`
 - `NOT_FOUND`
 - `INTERNAL_ERROR`
-
-Policy violations are returned as `INVALID_REQUEST` with descriptive `message`.
+- `POLICY_EXCEEDS_SINGLE_TX_LIMIT`
+- `POLICY_EXCEEDS_DAILY_LIMIT`
+- `POLICY_EXCEEDS_DAILY_TX_LIMIT`
+- `POLICY_ADDRESS_NOT_WHITELISTED`
+- `POLICY_OUTSIDE_TIME_WINDOW`
+- `POLICY_INVALID_AMOUNT`

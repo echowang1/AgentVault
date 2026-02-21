@@ -50,7 +50,15 @@ func TestHealthCheck(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "\"status\":\"ok\"")
+	var resp struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	assert.Equal(t, "ok", resp.Data.Status)
 }
 
 func TestCreateWallet_Success(t *testing.T) {
@@ -135,6 +143,7 @@ func TestPolicyAndSignFlow(t *testing.T) {
 	signBadW := httptest.NewRecorder()
 	r.ServeHTTP(signBadW, signBadReq)
 	require.Equal(t, http.StatusBadRequest, signBadW.Code)
+	assert.Contains(t, signBadW.Body.String(), ErrCodePolicyAddressNotWhitelisted)
 
 	signOkBody := map[string]string{
 		"address":      createResp.Data.Address,

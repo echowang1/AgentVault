@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"math/big"
 	"net/http"
 	"strings"
@@ -41,7 +42,7 @@ func NewWalletHandler(keyGen tss.KeyGenerator, signer tss.Signer, walletStore st
 }
 
 func (h *WalletHandler) Health(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
+	respondSuccess(c, http.StatusOK, gin.H{
 		"status":    "ok",
 		"version":   "0.1.0",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -125,7 +126,11 @@ func (h *WalletHandler) Sign(c *gin.Context) {
 			Timestamp: time.Now().UTC(),
 		})
 		if err != nil {
-			respondError(c, http.StatusBadRequest, ErrCodeInvalidRequest, err.Error(), nil)
+			if code, ok := policyErrorCode(err); ok {
+				respondError(c, http.StatusBadRequest, code, err.Error(), nil)
+				return
+			}
+			respondError(c, http.StatusInternalServerError, ErrCodeInternal, "policy check failed", nil)
 			return
 		}
 	}
@@ -325,6 +330,25 @@ func parseAmount(raw string) (*big.Int, error) {
 		return nil, policy.ErrInvalidAmount
 	}
 	return v, nil
+}
+
+func policyErrorCode(err error) (string, bool) {
+	switch {
+	case errors.Is(err, policy.ErrExceedsSingleTxLimit):
+		return ErrCodePolicyExceedsSingleTxLimit, true
+	case errors.Is(err, policy.ErrExceedsDailyLimit):
+		return ErrCodePolicyExceedsDailyLimit, true
+	case errors.Is(err, policy.ErrExceedsDailyTxLimit):
+		return ErrCodePolicyExceedsDailyTxLimit, true
+	case errors.Is(err, policy.ErrAddressNotWhitelisted):
+		return ErrCodePolicyAddressNotWhitelisted, true
+	case errors.Is(err, policy.ErrOutsideTimeWindow):
+		return ErrCodePolicyOutsideTimeWindow, true
+	case errors.Is(err, policy.ErrInvalidAmount):
+		return ErrCodePolicyInvalidAmount, true
+	default:
+		return "", false
+	}
 }
 
 func parseOptionalBig(raw string) *big.Int {

@@ -49,11 +49,18 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "status": { "type": "string", "example": "ok" },
-                    "version": { "type": "string", "example": "0.1.0" },
-                    "timestamp": { "type": "string", "format": "date-time" }
+                    "success": { "type": "boolean", "example": true },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "example": "ok" },
+                        "version": { "type": "string", "example": "0.1.0" },
+                        "timestamp": { "type": "string", "format": "date-time" }
+                      },
+                      "required": ["status", "version", "timestamp"]
+                    }
                   },
-                  "required": ["status", "version", "timestamp"]
+                  "required": ["success", "data"]
                 }
               }
             }
