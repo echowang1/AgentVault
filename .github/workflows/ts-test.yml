@@ -1,0 +1,34 @@
+name: TypeScript Tests
+
+on:
+  push:
+    branches: [ main, task/** ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./sdk
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ./sdk
+        run: npm test
+
+      - name: Run linter
+        working-directory: ./sdk
+        run: npm run lint
