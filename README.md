@@ -1,8 +1,8 @@
 # AgentVault
 
-[![Go Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/go-test.yml/badge.svg)](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/go-test.yml)
-[![TS Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/ts-test.yml/badge.svg)](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/ts-test.yml)
-[![E2E Tests](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/e2e.yml/badge.svg)](https://github.com/echowang1/agent-mpc-wallet/actions/workflows/e2e.yml)
+[![Go Tests](https://github.com/echowang1/AgentVault/actions/workflows/go-test.yml/badge.svg)](https://github.com/echowang1/AgentVault/actions/workflows/go-test.yml)
+[![TS Tests](https://github.com/echowang1/AgentVault/actions/workflows/ts-test.yml/badge.svg)](https://github.com/echowang1/AgentVault/actions/workflows/ts-test.yml)
+[![E2E Tests](https://github.com/echowang1/AgentVault/actions/workflows/e2e.yml/badge.svg)](https://github.com/echowang1/AgentVault/actions/workflows/e2e.yml)
 
 MPC wallet service and TypeScript SDK for AI agents.
 

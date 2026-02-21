@@ -60,7 +60,8 @@ export async function ensureE2EServer(): Promise<void> {
     process.stderr.write(`[e2e-server] ${chunk}`);
   });
 
-  await waitForHealth(SERVER_URL, 20000);
+  // CI cold-start for `go run` can be slow on first compile.
+  await waitForHealth(SERVER_URL, 90000);
 }
 
 export async function shutdownE2EServer(): Promise<void> {
