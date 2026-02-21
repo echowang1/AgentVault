@@ -1,20 +1,27 @@
-export const PACKAGE_NAME = '@agent-vault/sdk';
-export const VERSION = '0.1.0-alpha';
+export { MPCClient } from './client';
 
-export interface WalletConfig {
-  baseURL: string;
-  apiKey: string;
-}
+export type {
+  Address,
+  APIError,
+  APIErrorResponse,
+  APIResponse,
+  ChainId,
+  CreateWalletRequest,
+  CreateWalletResponse,
+  DailyUsage,
+  Hash,
+  MPCClientConfig,
+  Policy,
+  Shard,
+  SignRequest,
+  SignResponse,
+  WalletInfo,
+} from './types';
 
-export interface SignRequest {
-  address: string;
-  messageHash: string;
-  shard1: string;
-}
-
-export interface SignResponse {
-  signature: string;
-  r: string;
-  s: string;
-  v: number;
-}
+export {
+  AuthError,
+  MPCError,
+  NetworkError,
+  PolicyError,
+  ValidationError,
+} from './errors';

@@ -2,13 +2,14 @@
   "name": "@agent-vault/sdk",
   "version": "0.1.0",
   "description": "MPC Wallet SDK for AI Agents",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "node ./scripts/build.mjs",
-    "test": "node --test ./tests/index.test.mjs",
-    "lint": "node -e \"console.log('lint skipped in skeleton stage')\"",
-    "format": "node -e \"console.log('format skipped in skeleton stage')\""
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "lint": "echo 'lint not configured'",
+    "format": "echo 'format not configured'"
   },
   "keywords": [
     "mpc",
@@ -21,5 +22,9 @@
     "agent-vault"
   ],
   "author": "echowang1",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
 }

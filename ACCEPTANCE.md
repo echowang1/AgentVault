@@ -1,4 +1,4 @@
-# Task 006: 策略引擎 (基础版)
+# Task 007: SDK 基础 + HTTP 客户端
 
 **负责人**: Codex
 **审核人**: Claude
@@ -10,453 +10,553 @@
 ## 功能要求
 
 ### 必须实现 (Must Have)
-- [ ] 单笔金额上限检查
-- [ ] 每日金额上限检查
-- [ ] 地址白名单检查
-- [ ] 策略配置管理
-- [ ] 策略持久化存储
-- [ ] 完整的单元测试
+- [ ] TypeScript HTTP 客户端
+- [ ] 类型安全的 API 封装
+- [ ] 错误处理
+- [ ] 支持自定义 base URL
+- [ ] 支持自定义 timeout
+- [ ] 完整的类型定义
+- [ ] 单元测试（mock HTTP）
 
 ### 建议实现 (Should Have)
-- [ ] 每日交易笔数上限
-- [ ] 时间窗口限制
-- [ ] 策略优先级
-- [ ] 策略版本管理
+- [ ] 请求重试机制
+- [ ] 请求/响应日志
+- [ ] 浏览器环境支持
 
 ---
 
-## 接口定义
+## 项目结构
 
-```go
-// server/internal/policy/engine.go
-package policy
-
-import (
-    "context"
-    "math/big"
-    "time"
-)
-
-// Policy 策略定义
-type Policy struct {
-    // ID 策略唯一 ID
-    ID string `json:"id"`
-
-    // WalletID 应用此策略的钱包 ID
-    WalletID string `json:"wallet_id"`
-
-    // SingleTxLimit 单笔交易限额（wei）
-    // nil 表示不限制
-    SingleTxLimit *big.Int `json:"single_tx_limit"`
-
-    // DailyLimit 每日累计限额（wei）
-    // nil 表示不限制
-    DailyLimit *big.Int `json:"daily_limit"`
-
-    // Whitelist 白名单地址（允许的目标地址）
-    // 空列表表示不限制
-    Whitelist []string `json:"whitelist"`
-
-    // DailyTxLimit 每日交易笔数上限
-    // 0 表示不限制
-    DailyTxLimit int `json:"daily_tx_limit"`
-
-    // StartTime 开始时间（可选）
-    // 只在此时间后允许交易
-    StartTime *time.Time `json:"start_time"`
-
-    // EndTime 结束时间（可选）
-    // 只在此时间前允许交易
-    EndTime *time.Time `json:"end_time"`
-
-    // CreatedAt 创建时间
-    CreatedAt time.Time `json:"created_at"`
-
-    // UpdatedAt 更新时间
-    UpdatedAt time.Time `json:"updated_at"`
-}
-
-// SignRequest 签名请求（策略检查用）
-type SignRequest struct {
-    // WalletID 钱包 ID
-    WalletID string
-
-    // To 目标地址
-    To string
-
-    // Value 交易金额（wei）
-    Value *big.Int
-
-    // Timestamp 请求时间戳
-    Timestamp time.Time
-}
-
-// PolicyEngine 策略引擎接口
-type PolicyEngine interface {
-    // Check 检查请求是否符合策略
-    // 返回错误表示不符合策略
-    Check(ctx context.Context, req *SignRequest) error
-
-    // SetPolicy 设置钱包策略
-    SetPolicy(ctx context.Context, policy *Policy) error
-
-    // GetPolicy 获取钱包策略
-    GetPolicy(ctx context.Context, walletID string) (*Policy, error)
-
-    // DeletePolicy 删除钱包策略
-    DeletePolicy(ctx context.Context, walletID string) error
-
-    // GetDailyUsage 获取今日已使用额度
-    GetDailyUsage(ctx context.Context, walletID string) (*DailyUsage, error)
-}
-
-// DailyUsage 每日使用情况
-type DailyUsage struct {
-    // WalletID 钱包 ID
-    WalletID string `json:"wallet_id"`
-
-    // Date 日期
-    Date string `json:"date"` // YYYY-MM-DD
-
-    // TotalAmount 已交易总额（wei）
-    TotalAmount *big.Int `json:"total_amount"`
-
-    // TxCount 交易笔数
-    TxCount int `json:"tx_count"`
-}
-
-// NewPolicyEngine 创建策略引擎
-func NewPolicyEngine(storage Storage) (PolicyEngine, error)
+```
+sdk/
+├── src/
+│   ├── client.ts          # HTTP 客户端主类
+│   ├── types.ts           # TypeScript 类型定义
+│   ├── errors.ts          # 自定义错误类
+│   ├── utils.ts           # 工具函数
+│   └── index.ts           # 导出
+├── package.json
+├── tsconfig.json
+├── tsconfig.build.json
+└── vitest.config.ts       # 测试配置
 ```
 
 ---
 
-## 策略检查逻辑
+## 类型定义
 
-```go
-// server/internal/policy/engine.go
+```typescript
+// sdk/src/types.ts
 
-func (e *Engine) Check(ctx context.Context, req *SignRequest) error {
-    // 1. 获取策略
-    policy, err := e.storage.GetPolicy(ctx, req.WalletID)
-    if err != nil {
-        return ErrPolicyNotFound
-    }
+/**
+ * 钱包地址
+ */
+export type Address = `0x${string}`;
 
-    // 2. 单笔限额检查
-    if policy.SingleTxLimit != nil {
-        if req.Value.Cmp(policy.SingleTxLimit) > 0 {
-            return ErrExceedsSingleTxLimit
-        }
-    }
+/**
+ * 32 字节的哈希值
+ */
+export type Hash = `0x${string}`;
 
-    // 3. 白名单检查
-    if len(policy.Whitelist) > 0 {
-        if !e.isWhitelisted(policy.Whitelist, req.To) {
-            return ErrAddressNotWhitelisted
-        }
-    }
+/**
+ * 私钥分片（base64 编码）
+ */
+export type Shard = string;
 
-    // 4. 时间窗口检查
-    if policy.StartTime != nil && req.Timestamp.Before(*policy.StartTime) {
-        return ErrOutsideTimeWindow
-    }
-    if policy.EndTime != nil && req.Timestamp.After(*policy.EndTime) {
-        return ErrOutsideTimeWindow
-    }
+/**
+ * 链 ID
+ */
+export type ChainId = number;
 
-    // 5. 每日限额检查
-    if policy.DailyLimit != nil || policy.DailyTxLimit > 0 {
-        usage, err := e.storage.GetDailyUsage(ctx, req.WalletID, time.Now())
-        if err != nil {
-            return err
-        }
-
-        // 检查金额
-        if policy.DailyLimit != nil {
-            newTotal := new(big.Int).Add(usage.TotalAmount, req.Value)
-            if newTotal.Cmp(policy.DailyLimit) > 0 {
-                return ErrExceedsDailyLimit
-            }
-        }
-
-        // 检查笔数
-        if policy.DailyTxLimit > 0 && usage.TxCount >= policy.DailyTxLimit {
-            return ErrExceedsDailyTxLimit
-        }
-    }
-
-    return nil
+/**
+ * 创建钱包请求
+ */
+export interface CreateWalletRequest {
+  chainId?: ChainId;
 }
 
-// isWhitelisted 检查地址是否在白名单中
-func (e *Engine) isWhitelisted(whitelist []string, address string) bool {
-    normalized := strings.ToLower(address)
-    for _, addr := range whitelist {
-        if strings.ToLower(addr) == normalized {
-            return true
-        }
-    }
-    return false
+/**
+ * 创建钱包响应
+ */
+export interface CreateWalletResponse {
+  address: Address;
+  publicKey: string;
+  shard1: Shard;
+  shard2Id: string;
+}
+
+/**
+ * 签名请求
+ */
+export interface SignRequest {
+  address: Address;
+  messageHash: Hash;
+  shard1: Shard;
+}
+
+/**
+ * 签名响应
+ */
+export interface SignResponse {
+  signature: Hash;
+  r: string;
+  s: string;
+  v: number;
+}
+
+/**
+ * 钱包信息
+ */
+export interface WalletInfo {
+  address: Address;
+  publicKey: string;
+  createdAt: string;
+}
+
+/**
+ * 策略定义
+ */
+export interface Policy {
+  walletId: string;
+  singleTxLimit?: string;
+  dailyLimit?: string;
+  whitelist?: Address[];
+  dailyTxLimit?: number;
+  startTime?: string;
+  endTime?: string;
+}
+
+/**
+ * 每日使用情况
+ */
+export interface DailyUsage {
+  date: string; // YYYY-MM-DD
+  totalAmount: string;
+  txCount: number;
+}
+
+/**
+ * API 错误响应
+ */
+export interface APIError {
+  code: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * API 响应（成功）
+ */
+export interface APIResponse<T> {
+  success: true;
+  data: T;
+}
+
+/**
+ * API 响应（失败）
+ */
+export interface APIErrorResponse {
+  success: false;
+  error: APIError;
+}
+
+/**
+ * 客户端配置
+ */
+export interface MPCClientConfig {
+  /**
+   * API 基础 URL
+   */
+  baseURL: string;
+
+  /**
+   * API Key
+   */
+  apiKey: string;
+
+  /**
+   * 请求超时（毫秒）
+   * @default 30000
+   */
+  timeout?: number;
+
+  /**
+   * 自定义 fetch 实现
+   */
+  fetch?: typeof fetch;
 }
 ```
 
 ---
 
-## 错误定义
+## HTTP 客户端
 
-```go
-var (
-    ErrPolicyNotFound        = errors.New("策略未找到")
-    ErrExceedsSingleTxLimit  = errors.New("超过单笔交易限额")
-    ErrExceedsDailyLimit     = errors.New("超过每日交易限额")
-    ErrExceedsDailyTxLimit   = errors.New("超过每日交易笔数限额")
-    ErrAddressNotWhitelisted = errors.New("目标地址不在白名单中")
-    ErrOutsideTimeWindow     = errors.New("不在允许的时间窗口内")
-)
+```typescript
+// sdk/src/client.ts
+
+import type {
+  MPCClientConfig,
+  CreateWalletRequest,
+  CreateWalletResponse,
+  SignRequest,
+  SignResponse,
+  WalletInfo,
+  Policy,
+  DailyUsage,
+  APIResponse,
+  APIErrorResponse,
+} from './types';
+import { MPCError, NetworkError, ValidationError } from './errors';
+
+/**
+ * MPC Wallet HTTP 客户端
+ */
+export class MPCClient {
+  private readonly baseURL: string;
+  private readonly apiKey: string;
+  private readonly timeout: number;
+  private readonly fetch: typeof fetch;
+
+  constructor(config: MPCClientConfig) {
+    this.baseURL = config.baseURL.replace(/\/$/, '');
+    this.apiKey = config.apiKey;
+    this.timeout = config.timeout ?? 30000;
+    this.fetch = config.fetch ?? globalThis.fetch;
+  }
+
+  /**
+   * 创建新钱包
+   */
+  async createWallet(req?: CreateWalletRequest): Promise<CreateWalletResponse> {
+    const response = await this.post<CreateWalletResponse>(
+      '/api/v1/wallet/create',
+      req ?? {},
+    );
+    return response;
+  }
+
+  /**
+   * 签名消息
+   */
+  async sign(req: SignRequest): Promise<SignResponse> {
+    this.validateSignRequest(req);
+    const response = await this.post<SignResponse>(
+      '/api/v1/wallet/sign',
+      req,
+    );
+    return response;
+  }
+
+  /**
+   * 获取钱包信息
+   */
+  async getWallet(address: string): Promise<WalletInfo> {
+    return this.get<WalletInfo>(`/api/v1/wallet/${address}`);
+  }
+
+  /**
+   * 设置钱包策略
+   */
+  async setPolicy(address: string, policy: Partial<Policy>): Promise<void> {
+    await this.put<void>(`/api/v1/wallet/${address}/policy`, policy);
+  }
+
+  /**
+   * 获取钱包策略
+   */
+  async getPolicy(address: string): Promise<Policy> {
+    return this.get<Policy>(`/api/v1/wallet/${address}/policy`);
+  }
+
+  /**
+   * 获取每日使用情况
+   */
+  async getDailyUsage(address: string): Promise<DailyUsage> {
+    return this.get<DailyUsage>(`/api/v1/wallet/${address}/usage`);
+  }
+
+  /**
+   * 健康检查
+   */
+  async healthCheck(): Promise<{ status: string; version: string }> {
+    return this.get('/health');
+  }
+
+  // ========== 私有方法 ==========
+
+  private async get<T>(path: string): Promise<T> {
+    return this.request<T>('GET', path, undefined);
+  }
+
+  private async post<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('POST', path, body);
+  }
+
+  private async put<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>('PUT', path, body);
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body: unknown,
+  ): Promise<T> {
+    const url = `${this.baseURL}${path}`;
+    const headers = {
+      'Authorization': `Bearer ${this.apiKey}`,
+      'Content-Type': 'application/json',
+    };
+
+    const options: RequestInit = {
+      method,
+      headers,
+      signal: AbortSignal.timeout(this.timeout),
+    };
+
+    if (body !== undefined) {
+      options.body = JSON.stringify(body);
+    }
+
+    try {
+      const response = await this.fetch(url, options);
+      await this.checkResponse(response);
+      const data = await response.json();
+      return (data as APIResponse<T>).data;
+    } catch (error) {
+      throw this.handleError(error);
+    }
+  }
+
+  private async checkResponse(response: Response): Promise<void> {
+    if (!response.ok) {
+      const data = await response.json() as APIErrorResponse;
+      throw new MPCError(data.error.code, data.error.message, data.error.details);
+    }
+  }
+
+  private handleError(error: unknown): Error {
+    if (error instanceof MPCError) {
+      return error;
+    }
+
+    if (error instanceof TypeError) {
+      return new NetworkError(error.message);
+    }
+
+    if (error instanceof Error) {
+      return error;
+    }
+
+    return new Error(String(error));
+  }
+
+  private validateSignRequest(req: SignRequest): void {
+    // 验证地址格式
+    if (!/^0x[a-fA-F0-9]{40}$/.test(req.address)) {
+      throw new ValidationError('Invalid address format');
+    }
+
+    // 验证哈希格式
+    if (!/^0x[a-fA-F0-9]{64}$/.test(req.messageHash)) {
+      throw new ValidationError('Invalid message hash format');
+    }
+
+    // 验证 shard1
+    if (!req.shard1 || req.shard1.length === 0) {
+      throw new ValidationError('shard1 is required');
+    }
+  }
+}
 ```
 
 ---
 
-## 存储接口
+## 错误处理
 
-```go
-// server/internal/policy/storage.go
-package policy
+```typescript
+// sdk/src/errors.ts
 
-import (
-    "context"
-    "time"
-)
-
-// Storage 策略存储接口
-type Storage interface {
-    // SetPolicy 保存策略
-    SetPolicy(ctx context.Context, policy *Policy) error
-
-    // GetPolicy 获取策略
-    GetPolicy(ctx context.Context, walletID string) (*Policy, error)
-
-    // DeletePolicy 删除策略
-    DeletePolicy(ctx context.Context, walletID string) error
-
-    // GetDailyUsage 获取每日使用情况
-    GetDailyUsage(ctx context.Context, walletID string, date time.Time) (*DailyUsage, error)
-
-    // IncrementUsage 增加使用量
-    IncrementUsage(ctx context.Context, walletID string, date time.Time, amount *big.Int) error
-
-    // ResetDailyUsage 重置每日使用（用于新的一天）
-    ResetDailyUsage(ctx context.Context, walletID string, date time.Time) error
+/**
+ * MPC 客户端基础错误类
+ */
+export class MPCError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = 'MPCError';
+  }
 }
+
+/**
+ * 网络错误
+ */
+export class NetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+
+/**
+ * 验证错误
+ */
+export class ValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+/**
+ * 认证错误
+ */
+export class AuthError extends Error {
+  constructor(message: string = 'Authentication failed') {
+    super(message);
+    this.name = 'AuthError';
+  }
+}
+
+/**
+ * 策略错误
+ */
+export class PolicyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PolicyError';
+  }
+}
+```
+
+---
+
+## 导出
+
+```typescript
+// sdk/src/index.ts
+
+export { MPCClient } from './client';
+export type {
+  MPCClientConfig,
+  CreateWalletRequest,
+  CreateWalletResponse,
+  SignRequest,
+  SignResponse,
+  WalletInfo,
+  Policy,
+  DailyUsage,
+  Address,
+  Hash,
+  Shard,
+  ChainId,
+} from './types';
+
+export {
+  MPCError,
+  NetworkError,
+  ValidationError,
+  AuthError,
+  PolicyError,
+} from './errors';
 ```
 
 ---
 
 ## 测试用例
 
-```go
-// server/internal/policy/engine_test.go
-package policy
+```typescript
+// sdk/src/client.test.ts
 
-import (
-    "context"
-    "math/big"
-    "testing"
-    "time"
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
-)
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { MPCClient } from './client';
+import type { CreateWalletResponse } from './types';
 
-func TestCheck_SingleTxLimit(t *testing.T) {
-    engine := setupTestEngine(t)
-    ctx := context.Background()
+describe('MPCClient', () => {
+  let client: MPCClient;
+  let mockFetch: ReturnType<typeof vi.fn>;
 
-    // 设置策略：单笔限额 1 ETH
-    policy := &Policy{
-        ID:           "policy-1",
-        WalletID:     "wallet-1",
-        SingleTxLimit: big.NewInt(1e18), // 1 ETH
-    }
-    err := engine.SetPolicy(ctx, policy)
-    require.NoError(t, err)
+  beforeEach(() => {
+    mockFetch = vi.fn();
+    client = new MPCClient({
+      baseURL: 'http://localhost:8080',
+      apiKey: 'test-api-key',
+      fetch: mockFetch,
+    });
+  });
 
-    // 测试：0.5 ETH 应该通过
-    req := &SignRequest{
-        WalletID:  "wallet-1",
-        To:        "0x1234567890123456789012345678901234567890",
-        Value:     big.NewInt(5e17), // 0.5 ETH
-        Timestamp: time.Now(),
-    }
-    err = engine.Check(ctx, req)
-    assert.NoError(t, err)
+  describe('createWallet', () => {
+    it('should create a wallet successfully', async () => {
+      const mockResponse: CreateWalletResponse = {
+        address: '0x1234567890123456789012345678901234567890',
+        publicKey: '0x...',
+        shard1: 'base64data',
+        shard2Id: 'shard-2-id',
+      };
 
-    // 测试：2 ETH 应该失败
-    req.Value = big.NewInt(2e18)
-    err = engine.Check(ctx, req)
-    assert.Error(t, err)
-    assert.Equal(t, ErrExceedsSingleTxLimit, err)
-}
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: mockResponse,
+        }),
+      } as Response);
 
-func TestCheck_Whitelist(t *testing.T) {
-    engine := setupTestEngine(t)
-    ctx := context.Background()
+      const result = await client.createWallet();
 
-    // 设置策略：只有 Uniswap 和 Curve 在白名单中
-    policy := &Policy{
-        ID:        "policy-1",
-        WalletID:  "wallet-1",
-        Whitelist: []string{
-            "0xUniswap...",
-            "0xCurve...",
-        },
-    }
-    err := engine.SetPolicy(ctx, policy)
-    require.NoError(t, err)
+      expect(result).toEqual(mockResponse);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/api/v1/wallet/create',
+        expect.objectContaining({
+          method: 'POST',
+          headers: expect.objectContaining({
+            'Authorization': 'Bearer test-api-key',
+          }),
+        }),
+      );
+    });
 
-    // 测试：白名单地址应该通过
-    req := &SignRequest{
-        WalletID:  "wallet-1",
-        To:        "0xuniswap...",
-        Value:     big.NewInt(1e18),
-        Timestamp: time.Now(),
-    }
-    err = engine.Check(ctx, req)
-    assert.NoError(t, err)
+    it('should handle errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          success: false,
+          error: {
+            code: 'UNAUTHORIZED',
+            message: 'Invalid API key',
+          },
+        }),
+      } as Response);
 
-    // 测试：非白名单地址应该失败
-    req.To = "0xbad..."
-    err = engine.Check(ctx, req)
-    assert.Error(t, err)
-    assert.Equal(t, ErrAddressNotWhitelisted, err)
-}
+      await expect(client.createWallet()).rejects.toThrow('Invalid API key');
+    });
+  });
 
-func TestCheck_DailyLimit(t *testing.T) {
-    engine := setupTestEngine(t)
-    ctx := context.Background()
+  describe('sign', () => {
+    it('should validate address format', async () => {
+      await expect(
+        client.sign({
+          address: 'invalid' as any,
+          messageHash: '0x' + 'a'.repeat(64) as any,
+          shard1: 'test',
+        }),
+      ).rejects.toThrow('Invalid address format');
+    });
 
-    // 设置策略：每日限额 10 ETH
-    policy := &Policy{
-        ID:         "policy-1",
-        WalletID:   "wallet-1",
-        DailyLimit: big.NewInt(10e18),
-    }
-    err := engine.SetPolicy(ctx, policy)
-    require.NoError(t, err)
-
-    // 模拟今日已使用 8 ETH
-    today := time.Now()
-    engine.storage.IncrementUsage(ctx, "wallet-1", today, big.NewInt(8e18))
-
-    // 测试：1 ETH 应该通过
-    req := &SignRequest{
-        WalletID:  "wallet-1",
-        To:        "0x1234...",
-        Value:     big.NewInt(1e18),
-        Timestamp: now,
-    }
-    err = engine.Check(ctx, req)
-    assert.NoError(t, err)
-
-    // 测试：3 ETH 应该失败（8 + 3 = 11 > 10）
-    req.Value = big.NewInt(3e18)
-    err = engine.Check(ctx, req)
-    assert.Error(t, err)
-    assert.Equal(t, ErrExceedsDailyLimit, err)
-}
-
-func TestCheck_TimeWindow(t *testing.T) {
-    engine := setupTestEngine(t)
-    ctx := context.Background()
-
-    // 设置策略：只在工作时间允许
-    startTime := time.Date(2026, 2, 21, 9, 0, 0, 0, time.UTC)
-    endTime := time.Date(2026, 2, 21, 18, 0, 0, 0, time.UTC)
-
-    policy := &Policy{
-        ID:        "policy-1",
-        WalletID:  "wallet-1",
-        StartTime: &startTime,
-        EndTime:   &endTime,
-    }
-    err := engine.SetPolicy(ctx, policy)
-    require.NoError(t, err)
-
-    // 测试：在工作时间内应该通过
-    req := &SignRequest{
-        WalletID:  "wallet-1",
-        To:        "0x1234...",
-        Value:     big.NewInt(1e18),
-        Timestamp: time.Date(2026, 2, 21, 12, 0, 0, 0, time.UTC),
-    }
-    err = engine.Check(ctx, req)
-    assert.NoError(t, err)
-
-    // 测试：在工作时间外应该失败
-    req.Timestamp = time.Date(2026, 2, 21, 20, 0, 0, 0, time.UTC)
-    err = engine.Check(ctx, req)
-    assert.Error(t, err)
-    assert.Equal(t, ErrOutsideTimeWindow, err)
-}
-```
-
----
-
-## API 集成
-
-### 设置策略
-
-```http
-PUT /api/v1/wallet/:address/policy
-Authorization: Bearer <API_KEY>
-Content-Type: application/json
-
-请求:
-{
-  "single_tx_limit": "1000000000000000000",  // 1 ETH (wei)
-  "daily_limit": "10000000000000000000",     // 10 ETH
-  "whitelist": [
-    "0xUniswap...",
-    "0xCurve..."
-  ],
-  "daily_tx_limit": 100
-}
-```
-
-### 查询策略
-
-```http
-GET /api/v1/wallet/:address/policy
-Authorization: Bearer <API_KEY>
-
-响应:
-{
-  "success": true,
-  "data": {
-    "wallet_id": "wallet-1",
-    "single_tx_limit": "1000000000000000000",
-    "daily_limit": "10000000000000000000",
-    "whitelist": ["0x...", "0x..."],
-    "daily_tx_limit": 100
-  }
-}
-```
-
-### 查询每日使用
-
-```http
-GET /api/v1/wallet/:address/usage
-Authorization: Bearer <API_KEY>
-
-响应:
-{
-  "success": true,
-  "data": {
-    "date": "2026-02-21",
-    "total_amount": "5000000000000000000",  // 已用 5 ETH
-    "tx_count": 10
-  }
-}
+    it('should validate hash format', async () => {
+      await expect(
+        client.sign({
+          address: '0x1234567890123456789012345678901234567890' as any,
+          messageHash: 'invalid' as any,
+          shard1: 'test',
+        }),
+      ).rejects.toThrow('Invalid message hash format');
+    });
+  });
+});
 ```
 
 ---
@@ -464,22 +564,26 @@ Authorization: Bearer <API_KEY>
 ## 完成标志
 
 ### 功能验证
-- [ ] 所有策略检查正常工作
-- [ ] 策略可以持久化存储
-- [ ] 每日使用量正确累计
+- [ ] 所有 API 方法可正常调用
+- [ ] 类型定义完整
+- [ ] 错误处理正确
 - [ ] 所有测试通过
 
 ### 代码质量
-- [ ] `go test ./...` 通过
-- [ ] `golangci-lint run` 通过
-- [ ] 测试覆盖率 > 80%
+- [ ] `npm test` 通过
+- [ ] `npm run lint` 通过
+- [ ] 测试覆盖率 > 70%
 
-### 集成验证
-- [ ] API 可以设置策略
-- [ ] 签名请求会被策略检查
+### 构建验证
+- [ ] `npm run build` 成功
+- [ ] 生成的 `.d.ts` 文件正确
+
+### 发布准备
+- [ ] package.json 完整
+- [ ] README.md 有使用说明
 
 ---
 
 ## 下一步
 
-完成后，可以开始 **Task 007: SDK 基础 + HTTP 客户端**
+完成后，可以开始 **Task 008: MPCWallet 类**
