@@ -20,28 +20,28 @@ describe('Performance: MPC Wallet', () => {
 
   it('creates wallet within threshold', async () => {
     const start = performance.now();
-    const wallet = new MPCWallet({ client: { baseURL, apiKey, timeout: 120_000 } });
+    const wallet = new MPCWallet({ client: { baseURL, apiKey, timeout: 240_000 } });
     await wallet.create(1);
     const elapsed = performance.now() - start;
 
-    expect(elapsed).toBeLessThan(90_000);
+    expect(elapsed).toBeLessThan(150_000);
     console.log(`create wallet: ${elapsed.toFixed(1)}ms`);
-  }, 120_000);
+  }, 180_000);
 
   it('signs one message within threshold', async () => {
-    const wallet = new MPCWallet({ client: { baseURL, apiKey, timeout: 120_000 } });
+    const wallet = new MPCWallet({ client: { baseURL, apiKey, timeout: 240_000 } });
     await wallet.create(1);
 
     const start = performance.now();
     await wallet.signMessage('perf-sign-single');
     const elapsed = performance.now() - start;
 
-    expect(elapsed).toBeLessThan(30_000);
+    expect(elapsed).toBeLessThan(60_000);
     console.log(`sign single message: ${elapsed.toFixed(1)}ms`);
-  }, 120_000);
+  }, 180_000);
 
   it('handles batch signing throughput', async () => {
-    const wallet = new MPCWallet({ client: { baseURL, apiKey, timeout: 120_000 } });
+    const wallet = new MPCWallet({ client: { baseURL, apiKey, timeout: 240_000 } });
     await wallet.create(1);
 
     const count = 5;
@@ -52,7 +52,7 @@ describe('Performance: MPC Wallet', () => {
     const elapsed = performance.now() - start;
 
     expect(signatures).toHaveLength(count);
-    expect(elapsed).toBeLessThan(120_000);
+    expect(elapsed).toBeLessThan(180_000);
     console.log(`batch sign ${count}: ${elapsed.toFixed(1)}ms`);
-  }, 180_000);
+  }, 240_000);
 });

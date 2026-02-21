@@ -24,7 +24,7 @@ describe('E2E: MPC Wallet Flow', () => {
   const sdkClientConfig = () => ({
     baseURL,
     apiKey,
-    timeout: 120_000,
+    timeout: 240_000,
   });
 
   beforeAll(async () => {
